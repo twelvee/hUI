@@ -38,6 +38,13 @@ struct hui_ctx {
     hui_filter_spec filter_spec;
     int filter_spec_enabled;
     uint32_t prop_mask;
+    float pointer_x;
+    float pointer_y;
+    uint32_t pointer_buttons;
+    uint32_t hovered_node;
+    int pointer_active;
+    uint32_t key_modifiers;
+    HUI_VEC(hui_input_event) input_events;
     char last_error[256];
 };
 
@@ -63,6 +70,13 @@ hui_ctx *hui_create(void * (*alloc_fn)(size_t), void (*free_fn)(void *)) {
     ctx->filter_spec.flags = 0;
     ctx->filter_spec_enabled = 0;
     ctx->prop_mask = HUI_PROP_ALL;
+    ctx->pointer_x = 0.0f;
+    ctx->pointer_y = 0.0f;
+    ctx->pointer_buttons = 0;
+    ctx->hovered_node = 0xFFFFFFFFu;
+    ctx->pointer_active = 0;
+    ctx->key_modifiers = 0;
+    hui_vec_init(&ctx->input_events);
     return ctx;
 }
 
@@ -75,6 +89,7 @@ void hui_destroy(hui_ctx *ctx) {
     hui_css_reset(&ctx->stylesheet);
     hui_style_store_reset(&ctx->styles);
     hui_draw_list_reset(&ctx->draw);
+    hui_vec_free(&ctx->input_events);
     ctx->free_fn(ctx);
 }
 
@@ -189,6 +204,91 @@ int hui_build_ir(hui_ctx *ctx, const hui_build_opts *opts) {
     r = hui_layout(ctx, opts);
     if (r != HUI_OK) return r;
     return hui_paint(ctx);
+}
+
+static uint32_t hui_hit_test(const hui_ctx *ctx, float x, float y) {
+    if (!ctx) return 0xFFFFFFFFu;
+    const hui_dom *dom = &ctx->dom;
+    const hui_style_store *styles = &ctx->styles;
+    if (dom->nodes.len == 0) return 0xFFFFFFFFu;
+    if (styles->styles.len < dom->nodes.len) return 0xFFFFFFFFu;
+    for (size_t idx = dom->nodes.len; idx-- > 0;) {
+        const hui_dom_node *node = &dom->nodes.data[idx];
+        if (node->type != HUI_NODE_ELEM) continue;
+        const hui_computed_style *cs = &styles->styles.data[idx];
+        if (cs->display == 0) continue;
+        float left = node->x;
+        float top = node->y;
+        float right = left + node->w;
+        float bottom = top + node->h;
+        if (x >= left && x <= right && y >= top && y <= bottom)
+            return (uint32_t) idx;
+    }
+    return 0xFFFFFFFFu;
+}
+
+static uint32_t hui_update_hover_target(hui_ctx *ctx, uint32_t hit) {
+    uint32_t dirty = 0;
+    if (hit == ctx->hovered_node) return 0;
+    if (ctx->hovered_node != 0xFFFFFFFFu && ctx->hovered_node < ctx->dom.nodes.len) {
+        ctx->dom.nodes.data[ctx->hovered_node].flags &= ~HUI_NODE_FLAG_HOVER;
+        dirty |= HUI_DIRTY_STYLE | HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT;
+    }
+    ctx->hovered_node = 0xFFFFFFFFu;
+    if (hit != 0xFFFFFFFFu && hit < ctx->dom.nodes.len) {
+        ctx->dom.nodes.data[hit].flags |= HUI_NODE_FLAG_HOVER;
+        ctx->hovered_node = hit;
+        dirty |= HUI_DIRTY_STYLE | HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT;
+    }
+    return dirty;
+}
+
+static uint32_t hui_apply_pointer_position(hui_ctx *ctx, float x, float y) {
+    ctx->pointer_active = 1;
+    ctx->pointer_x = x;
+    ctx->pointer_y = y;
+    uint32_t hit = hui_hit_test(ctx, x, y);
+    return hui_update_hover_target(ctx, hit);
+}
+
+int hui_push_input(hui_ctx *ctx, const hui_input_event *event) {
+    if (!ctx || !event) return HUI_EINVAL;
+    hui_vec_push(&ctx->input_events, *event);
+    return HUI_OK;
+}
+
+uint32_t hui_process_input(hui_ctx *ctx) {
+    if (!ctx) return 0u;
+    uint32_t dirty = 0u;
+    for (size_t i = 0; i < ctx->input_events.len; i++) {
+        const hui_input_event *ev = &ctx->input_events.data[i];
+        switch (ev->type) {
+            case HUI_INPUT_EVENT_POINTER_MOVE:
+                dirty |= hui_apply_pointer_position(ctx, ev->data.pointer_move.x, ev->data.pointer_move.y);
+                break;
+            case HUI_INPUT_EVENT_POINTER_BUTTON:
+                ctx->pointer_buttons = ev->data.pointer_button.buttons;
+                dirty |= hui_apply_pointer_position(ctx, ev->data.pointer_button.x, ev->data.pointer_button.y);
+                break;
+            case HUI_INPUT_EVENT_POINTER_LEAVE:
+                if (ctx->pointer_active || ctx->hovered_node != 0xFFFFFFFFu) {
+                    ctx->pointer_active = 0;
+                    ctx->pointer_buttons = 0;
+                    dirty |= hui_update_hover_target(ctx, 0xFFFFFFFFu);
+                }
+                break;
+            case HUI_INPUT_EVENT_KEY_DOWN:
+            case HUI_INPUT_EVENT_KEY_UP:
+                ctx->key_modifiers = ev->data.key.modifiers;
+                break;
+            case HUI_INPUT_EVENT_TEXT_INPUT:
+            case HUI_INPUT_EVENT_NONE:
+            default:
+                break;
+        }
+    }
+    ctx->input_events.len = 0;
+    return dirty;
 }
 
 hui_ir_view hui_get_ir(hui_ctx *ctx) {

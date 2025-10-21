@@ -75,6 +75,7 @@ static hui_selector parse_selector(hui_intern *atoms, const char *css, size_t n,
         step.comb = HUI_COMB_DESC;
         step.simple.type = 0;
         step.simple.atom = 0;
+        step.pseudo_mask = HUI_SEL_PSEUDO_NONE;
         if (css[*i] == '.') {
             (*i)++;
             size_t start = *i;
@@ -109,6 +110,16 @@ static hui_selector parse_selector(hui_intern *atoms, const char *css, size_t n,
         } else {
             (*i)++;
             continue;
+        }
+        while (*i < n && css[*i] == ':') {
+            (*i)++;
+            size_t start = *i;
+            while (*i < n && is_name_char(css[*i])) (*i)++;
+            size_t plen = *i - start;
+            if (plen == 5 && strncmp(css + start, "hover", 5) == 0) {
+                step.pseudo_mask |= HUI_SEL_PSEUDO_HOVER;
+                sel.specificity += 10;
+            }
         }
         Temp t;
         t.step = step;

@@ -14,6 +14,11 @@ typedef enum {
     HUI_NODE_TEXT = 2
 } hui_node_type;
 
+enum {
+    HUI_NODE_FLAG_NONE = 0,
+    HUI_NODE_FLAG_HOVER = 1u << 0
+};
+
 typedef struct hui_dom_node {
     uint32_t gen;
     uint32_t parent;

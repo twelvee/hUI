@@ -34,6 +34,19 @@ enum {
     HUI_DIRTY_ALL = 0x7u
 };
 
+enum {
+    HUI_POINTER_BUTTON_PRIMARY = 1u << 0,
+    HUI_POINTER_BUTTON_SECONDARY = 1u << 1,
+    HUI_POINTER_BUTTON_MIDDLE = 1u << 2
+};
+
+enum {
+    HUI_KEY_MOD_SHIFT = 1u << 0,
+    HUI_KEY_MOD_CTRL = 1u << 1,
+    HUI_KEY_MOD_ALT = 1u << 2,
+    HUI_KEY_MOD_SUPER = 1u << 3
+};
+
 typedef enum {
     HUI_FILTER_TAKE = 0,
     HUI_FILTER_SKIP_DESCEND = 1,
@@ -68,6 +81,36 @@ typedef struct {
     float viewport_w, viewport_h, dpi;
     uint32_t flags;
 } hui_build_opts;
+
+typedef enum {
+    HUI_INPUT_EVENT_NONE = 0,
+    HUI_INPUT_EVENT_POINTER_MOVE,
+    HUI_INPUT_EVENT_POINTER_BUTTON,
+    HUI_INPUT_EVENT_POINTER_LEAVE,
+    HUI_INPUT_EVENT_KEY_DOWN,
+    HUI_INPUT_EVENT_KEY_UP,
+    HUI_INPUT_EVENT_TEXT_INPUT
+} hui_input_event_type;
+
+typedef struct {
+    hui_input_event_type type;
+    union {
+        struct {
+            float x, y;
+        } pointer_move;
+        struct {
+            float x, y;
+            uint32_t buttons;
+        } pointer_button;
+        struct {
+            uint32_t keycode;
+            uint32_t modifiers;
+        } key;
+        struct {
+            uint32_t codepoint;
+        } text;
+    } data;
+} hui_input_event;
 
 enum {
     HUI_PROP_DISPLAY = 1u << 0,
@@ -106,6 +149,10 @@ int hui_layout(hui_ctx *ctx, const hui_build_opts *opts);
 int hui_paint(hui_ctx *ctx);
 
 int hui_build_ir(hui_ctx *ctx, const hui_build_opts *opts);
+
+int hui_push_input(hui_ctx *ctx, const hui_input_event *event);
+
+uint32_t hui_process_input(hui_ctx *ctx);
 
 hui_ir_view hui_get_ir(hui_ctx *ctx);
 

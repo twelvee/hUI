@@ -89,6 +89,7 @@ int main(void) {
             "p.lead { margin-bottom: 16px; }"
             "div.cta { display: block; margin-top: 16px; }"
             "button { background-color: #2d2d30; color: #ffffff; padding: 12px 24px; margin-right: 12px; font-size: 28px; }"
+            "button:hover { background-color: #3b8ad9; color: #ffffff; }"
             "footer { background-color: #2d2d30; color: #bbbbbb; padding: 16px; margin-top: 24px; }";
 
     if (hui_feed_html(ctx, (hui_bytes){(const uint8_t *) html, strlen(html)}, 1) != HUI_OK) {
@@ -118,10 +119,59 @@ int main(void) {
         return 1;
     }
 
+    Vector2 prev_mouse = {-1.0f, -1.0f};
+    uint32_t prev_buttons = 0u;
+    int cursor_was_on_screen = 0;
+
     while (!WindowShouldClose()) {
+        uint32_t dirty = 0;
         if (IsWindowResized()) {
             opts.viewport_w = (float) GetScreenWidth();
             opts.viewport_h = (float) GetScreenHeight();
+            dirty |= HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT;
+        }
+
+        int cursor_on_screen = IsCursorOnScreen();
+        if (cursor_on_screen) {
+            Vector2 mouse = GetMousePosition();
+            uint32_t buttons = 0;
+            if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) buttons |= HUI_POINTER_BUTTON_PRIMARY;
+            if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT)) buttons |= HUI_POINTER_BUTTON_SECONDARY;
+            if (IsMouseButtonDown(MOUSE_BUTTON_MIDDLE)) buttons |= HUI_POINTER_BUTTON_MIDDLE;
+            if (mouse.x != prev_mouse.x || mouse.y != prev_mouse.y) {
+                hui_input_event move_event;
+                memset(&move_event, 0, sizeof(move_event));
+                move_event.type = HUI_INPUT_EVENT_POINTER_MOVE;
+                move_event.data.pointer_move.x = mouse.x;
+                move_event.data.pointer_move.y = mouse.y;
+                hui_push_input(ctx, &move_event);
+                prev_mouse = mouse;
+            }
+            if (buttons != prev_buttons) {
+                hui_input_event button_event;
+                memset(&button_event, 0, sizeof(button_event));
+                button_event.type = HUI_INPUT_EVENT_POINTER_BUTTON;
+                button_event.data.pointer_button.x = mouse.x;
+                button_event.data.pointer_button.y = mouse.y;
+                button_event.data.pointer_button.buttons = buttons;
+                hui_push_input(ctx, &button_event);
+                prev_buttons = buttons;
+            }
+        } else {
+            if (cursor_was_on_screen) {
+                hui_input_event leave_event;
+                memset(&leave_event, 0, sizeof(leave_event));
+                leave_event.type = HUI_INPUT_EVENT_POINTER_LEAVE;
+                hui_push_input(ctx, &leave_event);
+            }
+            prev_mouse = (Vector2){-1.0f, -1.0f};
+            prev_buttons = 0u;
+        }
+        cursor_was_on_screen = cursor_on_screen;
+
+        dirty |= hui_process_input(ctx);
+
+        if (dirty) {
             if (hui_build_ir(ctx, &opts) != HUI_OK) {
                 TraceLog(LOG_WARNING, "Rebuild failed: %s", hui_last_error(ctx));
             }

@@ -10,6 +10,11 @@ typedef enum { HUI_SEL_TAG = 1, HUI_SEL_CLASS = 2, HUI_SEL_ID = 3 } hui_sel_atom
 
 typedef enum { HUI_COMB_END = 0, HUI_COMB_DESC = 1, HUI_COMB_CHILD = 2 } hui_combinator;
 
+enum {
+    HUI_SEL_PSEUDO_NONE = 0,
+    HUI_SEL_PSEUDO_HOVER = 1u << 0
+};
+
 typedef struct {
     hui_sel_atom_type type;
     hui_atom atom;
@@ -18,6 +23,7 @@ typedef struct {
 typedef struct {
     hui_combinator comb;
     hui_sel_simple simple;
+    uint32_t pseudo_mask;
 } hui_sel_step;
 
 typedef struct {

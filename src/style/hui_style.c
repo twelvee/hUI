@@ -33,6 +33,8 @@ static int hui_match_selector(const hui_selector *sel, const hui_dom *dom, uint3
         else if (s.simple.type == HUI_SEL_ID) ok = (node->id == s.simple.atom);
         else if (s.simple.type == HUI_SEL_CLASS) ok = hui_node_has_class(node, s.simple.atom);
         if (!ok) return 0;
+        if ((s.pseudo_mask & HUI_SEL_PSEUDO_HOVER) && !(node->flags & HUI_NODE_FLAG_HOVER))
+            return 0;
         if (step + 1 >= sel->steps.len) return 1;
         hui_combinator comb = sel->steps.data[step].comb;
         step++;
