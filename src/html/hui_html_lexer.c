@@ -1,0 +1,147 @@
+#include "hui_html_lexer.h"
+
+#include <ctype.h>
+#include <string.h>
+
+static int is_name_char(char c) {
+    return isalnum((unsigned char) c) || c == '-' || c == '_' || c == ':';
+}
+
+static void skip_ws(const char *s, size_t len, size_t *i) {
+    while (*i < len && isspace((unsigned char) s[*i])) (*i)++;
+}
+
+static int slice_eq(hui_slice slice, const char *str) {
+    size_t n = strlen(str);
+    return slice.n == n && (n == 0 || memcmp(slice.p, str, n) == 0);
+}
+
+void hui_html_lexer_init(hui_html_lexer *lexer, const char *data, size_t len) {
+    lexer->buf = data;
+    lexer->len = len;
+    lexer->pos = 0;
+    lexer->finished = 0;
+}
+
+static void reset_token(hui_token *tk, hui_token_kind kind) {
+    tk->kind = kind;
+    tk->text.p = tk->tag.p = tk->id.p = tk->class_attr.p = NULL;
+    tk->text.n = tk->tag.n = tk->id.n = tk->class_attr.n = 0;
+}
+
+int hui_html_next(hui_html_lexer *lexer, hui_token *out) {
+    const char *s = lexer->buf;
+    size_t n = lexer->len;
+    size_t i = lexer->pos;
+
+    if (lexer->finished || i >= n) {
+        reset_token(out, HUI_TK_EOF);
+        lexer->finished = 1;
+        return 0;
+    }
+
+    if (s[i] != '<') {
+        size_t start = i;
+        while (i < n && s[i] != '<') i++;
+        reset_token(out, HUI_TK_TEXT);
+        out->text.p = s + start;
+        out->text.n = i - start;
+        lexer->pos = i;
+        return 1;
+    }
+
+    i++;
+    if (i >= n) {
+        reset_token(out, HUI_TK_ERR);
+        lexer->pos = n;
+        return 0;
+    }
+
+    if (s[i] == '!') {
+        if (i + 2 < n && s[i + 1] == '-' && s[i + 2] == '-') {
+            i += 3;
+            while (i + 2 < n && !(s[i] == '-' && s[i + 1] == '-' && s[i + 2] == '>')) i++;
+            i = (i + 3 <= n) ? i + 3 : n;
+        } else {
+            while (i < n && s[i] != '>') i++;
+            if (i < n) i++;
+        }
+        lexer->pos = i;
+        return hui_html_next(lexer, out);
+    }
+
+    if (s[i] == '/') {
+        i++;
+        size_t start = i;
+        while (i < n && is_name_char(s[i])) i++;
+        size_t tag_len = i - start;
+        while (i < n && s[i] != '>') i++;
+        if (i < n) i++;
+        reset_token(out, HUI_TK_CLOSE);
+        out->tag.p = s + start;
+        out->tag.n = tag_len;
+        lexer->pos = i;
+        return 1;
+    }
+
+    size_t tag_start = i;
+    while (i < n && is_name_char(s[i])) i++;
+    size_t tag_len = i - tag_start;
+    hui_slice id = {0};
+    hui_slice class_attr = {0};
+
+    while (i < n) {
+        skip_ws(s, n, &i);
+        if (i >= n) break;
+        if (s[i] == '>') {
+            i++;
+            reset_token(out, HUI_TK_OPEN);
+            out->tag.p = s + tag_start;
+            out->tag.n = tag_len;
+            out->id = id;
+            out->class_attr = class_attr;
+            lexer->pos = i;
+            return 1;
+        }
+        if (s[i] == '/' && i + 1 < n && s[i + 1] == '>') {
+            i += 2;
+            reset_token(out, HUI_TK_SELF_CLOSE);
+            out->tag.p = s + tag_start;
+            out->tag.n = tag_len;
+            out->id = id;
+            out->class_attr = class_attr;
+            lexer->pos = i;
+            return 1;
+        }
+
+        size_t attr_start = i;
+        while (i < n && is_name_char(s[i])) i++;
+        size_t attr_len = i - attr_start;
+        skip_ws(s, n, &i);
+        hui_slice value = {0};
+        if (i < n && s[i] == '=') {
+            i++;
+            skip_ws(s, n, &i);
+            if (i < n && (s[i] == '"' || s[i] == '\'')) {
+                char quote = s[i++];
+                size_t val_start = i;
+                while (i < n && s[i] != quote) i++;
+                value.p = s + val_start;
+                value.n = (i < n) ? i - val_start : 0;
+                if (i < n) i++;
+            } else {
+                size_t val_start = i;
+                while (i < n && !isspace((unsigned char) s[i]) && s[i] != '>' && s[i] != '/') i++;
+                value.p = s + val_start;
+                value.n = i - val_start;
+            }
+        }
+        hui_slice name = {s + attr_start, attr_len};
+        if (slice_eq(name, "id")) id = value;
+        else if (slice_eq(name, "class")) class_attr = value;
+    }
+
+    reset_token(out, HUI_TK_ERR);
+    lexer->pos = n;
+    return 0;
+}

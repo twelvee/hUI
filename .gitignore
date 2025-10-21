@@ -1,0 +1,6 @@
+cmake-build-debug
+cmake-build-release
+.idea
+node_modules
+package.json
+package-lock.json
