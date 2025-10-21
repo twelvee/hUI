@@ -124,26 +124,26 @@ jobs:
         id: coverage
         run: |
           python - <<'PY'
-  import json
-  import os
+import json
+import os
 
-  with open('coverage.json', 'r', encoding='utf-8') as fh:
-      data = json.load(fh)
+with open('coverage.json', 'r', encoding='utf-8') as fh:
+    data = json.load(fh)
 
-  percent = float(data.get('line_percent', 0.0))
-  if percent >= 90.0:
-      color = 'brightgreen'
-  elif percent >= 75.0:
-      color = 'yellow'
-  elif percent >= 50.0:
-      color = 'orange'
-  else:
-      color = 'red'
+percent = float(data.get('line_percent', 0.0))
+if percent >= 90.0:
+    color = 'brightgreen'
+elif percent >= 75.0:
+    color = 'yellow'
+elif percent >= 50.0:
+    color = 'orange'
+else:
+    color = 'red'
 
-  output = os.environ['GITHUB_OUTPUT']
-  with open(output, 'a', encoding='utf-8') as fh:
-      fh.write(f"percent={percent:.2f}\n")
-      fh.write(f"color={color}\n")
+output = os.environ['GITHUB_OUTPUT']
+with open(output, 'a', encoding='utf-8') as fh:
+    fh.write(f"percent={percent:.2f}\n")
+    fh.write(f"color={color}\n")
 PY
         working-directory: build
 
