@@ -35,7 +35,7 @@ if (HUI_BUILD_RAYLIB_EXAMPLE)
     )
     FetchContent_MakeAvailable(raylib)
 
-    add_executable(hui_raylib_example examples/raylib_example.c)
+    add_executable(hui_raylib_example examples/raylib_simple/raylib_example.c)
     target_link_libraries(hui_raylib_example PRIVATE hui raylib)
 endif()
 
@@ -56,6 +56,7 @@ set(HUI_TEST_CASES
     input_hover_interaction
     font_size_application
     text_field_interaction
+    render_caching
     text_binding_render
     auto_text_input
     input_dirty_flags

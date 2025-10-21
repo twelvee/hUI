@@ -63,6 +63,10 @@ static hui_atom hui_binding_atom_from_mustache(hui_ctx *ctx, const char *text, s
 static hui_atom hui_binding_atom_from_attr(hui_ctx *ctx, const char *text, size_t len);
 static int hui_binding_push_from_string(hui_ctx *ctx, size_t entry_index, const char *text, int *string_applied);
 static hui_auto_text_field *hui_find_auto_field(hui_ctx *ctx, uint32_t dom_index);
+static void hui_ctx_accumulate_dirty(hui_ctx *ctx, uint32_t flags);
+static hui_build_opts hui_normalize_build_opts(const hui_build_opts *opts);
+static int hui_render_opts_equal(const hui_ctx *ctx, const hui_build_opts *opts);
+static void hui_render_cache_store(hui_ctx *ctx, const hui_build_opts *opts);
 
 struct hui_ctx {
     void * (*alloc_fn)(size_t);
@@ -115,11 +119,56 @@ struct hui_ctx {
         int delays_set;
         size_t buffer_capacity;
     } text_input_defaults;
+    uint32_t dirty_flags;
+    int draw_valid;
+    uint64_t draw_version;
+    struct {
+        float viewport_w;
+        float viewport_h;
+        float dpi;
+        uint32_t flags;
+        int valid;
+    } render_cache;
     char last_error[256];
 };
 
 static void hui_set_error(hui_ctx *ctx, const char *msg) {
     snprintf(ctx->last_error, sizeof(ctx->last_error), "%s", msg);
+}
+
+static void hui_ctx_accumulate_dirty(hui_ctx *ctx, uint32_t flags) {
+    if (!ctx) return;
+    uint32_t masked = flags & HUI_DIRTY_ALL;
+    if (masked == 0) return;
+    ctx->dirty_flags |= masked;
+    ctx->draw_valid = 0;
+}
+
+static hui_build_opts hui_normalize_build_opts(const hui_build_opts *opts) {
+    hui_build_opts normalized;
+    normalized.viewport_w = (opts && opts->viewport_w > 0.0f) ? opts->viewport_w : 800.0f;
+    normalized.viewport_h = (opts && opts->viewport_h > 0.0f) ? opts->viewport_h : 600.0f;
+    normalized.dpi = (opts && opts->dpi > 0.0f) ? opts->dpi : 96.0f;
+    normalized.flags = opts ? opts->flags : 0u;
+    return normalized;
+}
+
+static int hui_render_opts_equal(const hui_ctx *ctx, const hui_build_opts *opts) {
+    if (!ctx || !opts) return 0;
+    if (!ctx->render_cache.valid) return 0;
+    return ctx->render_cache.viewport_w == opts->viewport_w &&
+           ctx->render_cache.viewport_h == opts->viewport_h &&
+           ctx->render_cache.dpi == opts->dpi &&
+           ctx->render_cache.flags == opts->flags;
+}
+
+static void hui_render_cache_store(hui_ctx *ctx, const hui_build_opts *opts) {
+    if (!ctx || !opts) return;
+    ctx->render_cache.viewport_w = opts->viewport_w;
+    ctx->render_cache.viewport_h = opts->viewport_h;
+    ctx->render_cache.dpi = opts->dpi;
+    ctx->render_cache.flags = opts->flags;
+    ctx->render_cache.valid = 1;
 }
 
 hui_ctx *hui_create(void * (*alloc_fn)(size_t), void (*free_fn)(void *)) {
@@ -166,6 +215,14 @@ hui_ctx *hui_create(void * (*alloc_fn)(size_t), void (*free_fn)(void *)) {
     ctx->text_input_defaults.backspace_repeat_delay = 0.0f;
     ctx->text_input_defaults.delays_set = 0;
     ctx->text_input_defaults.buffer_capacity = 256;
+    ctx->dirty_flags = HUI_DIRTY_ALL;
+    ctx->draw_valid = 0;
+    ctx->draw_version = 0;
+    ctx->render_cache.viewport_w = 0.0f;
+    ctx->render_cache.viewport_h = 0.0f;
+    ctx->render_cache.dpi = 0.0f;
+    ctx->render_cache.flags = 0;
+    ctx->render_cache.valid = 0;
     return ctx;
 }
 
@@ -292,6 +349,7 @@ static int hui_auto_text_fields_rebuild(hui_ctx *ctx) {
         hui_vec_push(&ctx->auto_text_fields, auto_field);
     }
 
+    hui_ctx_accumulate_dirty(ctx, HUI_DIRTY_STYLE | HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT);
     return HUI_OK;
 }
 
@@ -705,13 +763,17 @@ int hui_parse(hui_ctx *ctx) {
     for (size_t bi = 0; bi < ctx->bindings.len; bi++) {
         hui_binding_entry *entry = &ctx->bindings.data[bi];
         hui_binding_pull_pointer(entry);
-        hui_binding_apply_text_nodes(ctx, entry);
+        uint32_t binding_dirty = hui_binding_apply_text_nodes(ctx, entry);
+        hui_ctx_accumulate_dirty(ctx, binding_dirty);
     }
     int auto_r = hui_auto_text_fields_rebuild(ctx);
     if (auto_r != HUI_OK) return auto_r;
     for (size_t bi = 0; bi < ctx->bindings.len; bi++) {
-        hui_binding_apply_inputs_from_binding(ctx, bi, 1);
+        uint32_t input_dirty = hui_binding_apply_inputs_from_binding(ctx, bi, 1);
+        hui_ctx_accumulate_dirty(ctx, input_dirty);
     }
+    ctx->render_cache.valid = 0;
+    hui_ctx_accumulate_dirty(ctx, HUI_DIRTY_ALL);
     return HUI_OK;
 }
 
@@ -723,10 +785,12 @@ int hui_style(hui_ctx *ctx) {
 }
 
 int hui_layout(hui_ctx *ctx, const hui_build_opts *opts) {
+    hui_build_opts normalized = hui_normalize_build_opts(opts);
+    hui_render_cache_store(ctx, &normalized);
     hui_layout_opts layout_opts;
-    layout_opts.viewport_w = opts ? opts->viewport_w : 800.0f;
-    layout_opts.viewport_h = opts ? opts->viewport_h : 600.0f;
-    layout_opts.dpi = opts ? opts->dpi : 96.0f;
+    layout_opts.viewport_w = normalized.viewport_w;
+    layout_opts.viewport_h = normalized.viewport_h;
+    layout_opts.dpi = normalized.dpi;
     hui_layout_run(&ctx->dom, &ctx->styles, &layout_opts);
     return HUI_OK;
 }
@@ -734,16 +798,54 @@ int hui_layout(hui_ctx *ctx, const hui_build_opts *opts) {
 int hui_paint(hui_ctx *ctx) {
     hui_draw_list_reset(&ctx->draw);
     hui_draw_list_init(&ctx->draw);
-    hui_paint_build(&ctx->draw, &ctx->dom, &ctx->styles);
+    float viewport_w = ctx->render_cache.valid ? ctx->render_cache.viewport_w : 800.0f;
+    float viewport_h = ctx->render_cache.valid ? ctx->render_cache.viewport_h : 600.0f;
+    hui_paint_build(&ctx->draw, &ctx->dom, &ctx->styles, viewport_w, viewport_h);
     return HUI_OK;
 }
 
 int hui_build_ir(hui_ctx *ctx, const hui_build_opts *opts) {
-    int r = hui_style(ctx);
-    if (r != HUI_OK) return r;
-    r = hui_layout(ctx, opts);
-    if (r != HUI_OK) return r;
-    return hui_paint(ctx);
+    return hui_render(ctx, opts, NULL);
+}
+
+int hui_render(hui_ctx *ctx, const hui_build_opts *opts, hui_render_output *out) {
+    if (!ctx) return HUI_EINVAL;
+    hui_render_output local_out;
+    memset(&local_out, 0, sizeof(local_out));
+    uint32_t pending_dirty = ctx->dirty_flags & HUI_DIRTY_ALL;
+    hui_build_opts normalized = hui_normalize_build_opts(opts);
+    int opts_changed = !hui_render_opts_equal(ctx, &normalized);
+    int needs_style = opts_changed || !ctx->draw_valid || ((pending_dirty & HUI_DIRTY_STYLE) != 0);
+    int needs_layout = opts_changed || !ctx->draw_valid || ((pending_dirty & HUI_DIRTY_LAYOUT) != 0) || needs_style;
+    int needs_paint = opts_changed || !ctx->draw_valid || ((pending_dirty & HUI_DIRTY_PAINT) != 0) || needs_layout;
+    int status = HUI_OK;
+
+    if (needs_style) {
+        status = hui_style(ctx);
+        if (status != HUI_OK) goto render_end;
+    }
+    if (needs_layout) {
+        status = hui_layout(ctx, &normalized);
+        if (status != HUI_OK) goto render_end;
+    }
+    if (needs_paint) {
+        status = hui_paint(ctx);
+        if (status != HUI_OK) goto render_end;
+        ctx->draw_valid = 1;
+        ctx->draw_version++;
+        hui_render_cache_store(ctx, &normalized);
+        ctx->dirty_flags &= ~pending_dirty;
+        local_out.changed = 1;
+    } else {
+        local_out.changed = 0;
+    }
+
+render_end:
+    local_out.dirty_flags = pending_dirty;
+    local_out.draw.items = ctx->draw.cmds.data;
+    local_out.draw.count = ctx->draw.cmds.len;
+    if (out) *out = local_out;
+    return status;
 }
 
 static uint32_t hui_hit_test(const hui_ctx *ctx, float x, float y) {
@@ -899,6 +1001,7 @@ uint32_t hui_process_input(hui_ctx *ctx) {
     ctx->input_state.keys_pressed.count = ctx->key_pressed.len;
     ctx->input_state.keys_released.data = ctx->key_released.data;
     ctx->input_state.keys_released.count = ctx->key_released.len;
+    hui_ctx_accumulate_dirty(ctx, dirty);
     return dirty;
 }
 
@@ -907,6 +1010,7 @@ uint32_t hui_step(hui_ctx *ctx, float dt) {
     uint32_t dirty = hui_process_input(ctx);
     dirty |= hui_auto_text_fields_step(ctx, dt);
     dirty |= hui_binding_sync_ctx(ctx);
+    hui_ctx_accumulate_dirty(ctx, dirty);
     return dirty;
 }
 
@@ -982,8 +1086,10 @@ int hui_bind_variable(hui_ctx *ctx, const char *name, const hui_binding *binding
     hui_binding_pull_pointer(entry);
     if (ctx->dom.nodes.len > 0) {
         hui_binding_relink_entry(ctx, (size_t) idx);
-        hui_binding_apply_text_nodes(ctx, entry);
-        hui_binding_apply_inputs_from_binding(ctx, (size_t) idx, 1);
+        uint32_t text_dirty = hui_binding_apply_text_nodes(ctx, entry);
+        hui_ctx_accumulate_dirty(ctx, text_dirty);
+        uint32_t input_dirty = hui_binding_apply_inputs_from_binding(ctx, (size_t) idx, 1);
+        hui_ctx_accumulate_dirty(ctx, input_dirty);
     }
     return HUI_OK;
 }
@@ -1031,6 +1137,7 @@ int hui_unbind_variable(hui_ctx *ctx, const char *name) {
     }
 
     ctx->bindings.len--;
+    hui_ctx_accumulate_dirty(ctx, HUI_DIRTY_STYLE | HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT);
     return HUI_OK;
 }
 
@@ -1304,9 +1411,13 @@ int hui_dom_append_child(hui_ctx *ctx, hui_node_handle parent, hui_node_handle c
 }
 
 void hui_mark_dirty(hui_ctx *ctx, hui_node_handle h, uint32_t flags) {
-    (void) ctx;
-    (void) h;
-    (void) flags;
+    if (!ctx) return;
+    hui_ctx_accumulate_dirty(ctx, flags);
+    if (hui_node_is_null(h)) return;
+    if (h.index >= ctx->dom.nodes.len) return;
+    hui_dom_node *node = &ctx->dom.nodes.data[h.index];
+    if (node->gen != h.gen) return;
+    (void) node;
 }
 
 int hui_restyle_and_relayout(hui_ctx *ctx, const hui_build_opts *opts) {

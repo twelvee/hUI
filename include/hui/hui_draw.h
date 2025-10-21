@@ -25,6 +25,12 @@ typedef struct {
     size_t count;
 } hui_draw_list_view;
 
+typedef struct {
+    hui_draw_list_view draw;
+    uint32_t dirty_flags;
+    int changed;
+} hui_render_output;
+
 #ifdef __cplusplus
 }
 #endif

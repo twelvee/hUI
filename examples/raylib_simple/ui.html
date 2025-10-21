@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>hUI Raylib Demo</title>
+</head>
+<body>
+<main id="app">
+    <section class="card">
+        <header class="card-header">
+            <h1 class="card-title">Get In Touch</h1>
+            <p class="card-subtitle">Fill the form to see live bindings.</p>
+        </header>
+        <form class="form">
+            <label class="field">
+                <span class="field-label">Name</span>
+                <input id="name-input" value="{{ name_value }}" placeholder="Your name">
+            </label>
+            <label class="field">
+                <span class="field-label">Email</span>
+                <input id="email-input" value="{{ email_value }}" placeholder="you@example.com">
+            </label>
+            <div class="summary">
+                <span class="summary-label">Summary:</span>
+                <span class="summary-value">
+                    <span>Hi </span>
+                    <span id="summary-name">{{ name_value }}</span>
+                    <span>, we will reach you at </span>
+                    <span id="summary-email">{{ email_value }}</span>
+                    <span>.</span>
+                </span>
+            </div>
+            <button id="submit-button" type="button">Send</button>
+        </form>
+    </section>
+</main>
+</body>
+</html>

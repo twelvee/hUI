@@ -121,7 +121,7 @@ static void test_style_layout_paint(void) {
     hui_layout_run(&dom, &store, &opts);
     hui_draw_list list;
     hui_draw_list_init(&list);
-    hui_paint_build(&list, &dom, &store);
+    hui_paint_build(&list, &dom, &store, 800.0f, 600.0f);
     ASSERT(list.cmds.len >= 2);
     hui_draw_list_reset(&list);
     hui_style_store_reset(&store);
@@ -642,6 +642,37 @@ static void test_text_field_interaction(void) {
     hui_destroy(ctx);
 }
 
+static void test_render_caching(void) {
+    const char *html = "<div id='root'><span id='label'>Hello</span></div>";
+    const char *css = "div { background-color: #202020; color: #ffffff; padding: 8px; }";
+    hui_ctx *ctx = hui_create(NULL, NULL);
+    ASSERT(ctx != NULL);
+    ASSERT(hui_feed_html(ctx, (hui_bytes){(const uint8_t *) html, strlen(html)}, 1) == HUI_OK);
+    ASSERT(hui_feed_css(ctx, (hui_bytes){(const uint8_t *) css, strlen(css)}, 1) == HUI_OK);
+    ASSERT(hui_parse(ctx) == HUI_OK);
+    hui_build_opts opts = {320.0f, 180.0f, 96.0f, 0};
+
+    hui_render_output first = {0};
+    ASSERT(hui_render(ctx, &opts, &first) == HUI_OK);
+    ASSERT(first.changed != 0);
+    size_t initial_commands = first.draw.count;
+
+    hui_render_output second = {0};
+    ASSERT(hui_render(ctx, &opts, &second) == HUI_OK);
+    ASSERT(second.changed == 0);
+    ASSERT(second.draw.count == initial_commands);
+
+    hui_node_handle root = hui_dom_root(ctx);
+    ASSERT(!hui_node_is_null(root));
+    hui_mark_dirty(ctx, root, HUI_DIRTY_PAINT);
+
+    hui_render_output third = {0};
+    ASSERT(hui_render(ctx, &opts, &third) == HUI_OK);
+    ASSERT(third.changed != 0);
+
+    hui_destroy(ctx);
+}
+
 static void test_text_binding_render(void) {
     hui_ctx *ctx = hui_create(NULL, NULL);
     ASSERT(ctx != NULL);
@@ -765,6 +796,7 @@ static const test_case tests[] = {
     {"input_hover_interaction", test_input_hover_interaction},
     {"font_size_application", test_font_size_application},
     {"text_field_interaction", test_text_field_interaction},
+    {"render_caching", test_render_caching},
     {"text_binding_render", test_text_binding_render},
     {"auto_text_input", test_auto_text_input},
     {"input_dirty_flags", test_input_dirty_flags},
