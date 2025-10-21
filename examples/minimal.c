@@ -4,13 +4,23 @@
 
 #include "hui_err.h"
 #include "hui/hui.h"
+#include "hui/hui_html_tags.h"
 
 static hui_filter_decision only_ui(const hui_tag_probe *probe, void *user) {
     (void) user;
-    const char *keep[] = {"header", "main", "footer", "h1", "p", "button", "div", "span"};
+    static const hui_html_tag_entry keep[] = {
+            {HUI_HTML_TAG_HEADER, sizeof(HUI_HTML_TAG_HEADER) - 1},
+            {HUI_HTML_TAG_MAIN, sizeof(HUI_HTML_TAG_MAIN) - 1},
+            {HUI_HTML_TAG_FOOTER, sizeof(HUI_HTML_TAG_FOOTER) - 1},
+            {HUI_HTML_TAG_H1, sizeof(HUI_HTML_TAG_H1) - 1},
+            {HUI_HTML_TAG_P, sizeof(HUI_HTML_TAG_P) - 1},
+            {HUI_HTML_TAG_BUTTON, sizeof(HUI_HTML_TAG_BUTTON) - 1},
+            {HUI_HTML_TAG_DIV, sizeof(HUI_HTML_TAG_DIV) - 1},
+            {HUI_HTML_TAG_SPAN, sizeof(HUI_HTML_TAG_SPAN) - 1},
+    };
     for (size_t i = 0; i < sizeof(keep) / sizeof(keep[0]); i++) {
-        size_t len = strlen(keep[i]);
-        if (probe->tag_len == len && memcmp(probe->tag, keep[i], len) == 0) return HUI_FILTER_TAKE;
+        const hui_html_tag_entry *tag = &keep[i];
+        if (probe->tag_len == tag->length && memcmp(probe->tag, tag->name, tag->length) == 0) return HUI_FILTER_TAKE;
     }
     return HUI_FILTER_SKIP_DESCEND;
 }
