@@ -3,6 +3,8 @@ project(hUI C)
 
 set(CMAKE_C_STANDARD 11)
 include(GNUInstallDirs)
+
+option(HUI_ENABLE_COVERAGE "Enable coverage instrumentation" OFF)
 option(HUI_BUILD_RAYLIB_EXAMPLE "Build the raylib integration example" ON)
 
 file(GLOB SRC
@@ -41,6 +43,15 @@ add_executable(hui_tests tests/test_runner.c)
 target_link_libraries(hui_tests hui)
 target_include_directories(hui_tests PRIVATE src include)
 add_test(NAME hui_tests COMMAND hui_tests)
+
+if (HUI_ENABLE_COVERAGE)
+    if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        add_compile_options(--coverage -O0)
+        add_link_options(--coverage)
+    else ()
+        message(WARNING "Coverage requested, but compiler ${CMAKE_C_COMPILER_ID} is not supported for coverage flags.")
+    endif ()
+endif ()
 
 install(TARGETS hui
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}

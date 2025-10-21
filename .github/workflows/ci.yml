@@ -83,3 +83,98 @@ jobs:
           name: hui-${{ runner.os }}-${{ env.BUILD_TYPE }}
           path: ${{ env.INSTALL_DIR }}
           if-no-files-found: error
+
+  coverage:
+    runs-on: ubuntu-latest
+    env:
+      BUILD_TYPE: Debug
+      INSTALL_DIR: ${{ github.workspace }}/coverage-install
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install coverage tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcovr lcov
+
+      - name: Configure CMake
+        run: >
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=${BUILD_TYPE}
+          -DHUI_BUILD_RAYLIB_EXAMPLE=OFF
+          -DHUI_ENABLE_COVERAGE=ON
+          -DCMAKE_INSTALL_PREFIX=${INSTALL_DIR}
+
+      - name: Build
+        run: cmake --build build --config ${BUILD_TYPE} --parallel
+
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Generate coverage reports
+        run: |
+          gcovr --root .. --exclude 'tests/.*' --xml-pretty coverage.xml --html-details coverage.html --json-summary coverage.json
+          gcovr --root .. --exclude 'tests/.*'
+        working-directory: build
+
+      - name: Extract coverage
+        id: coverage
+        run: |
+          python - <<'PY'
+import json
+import os
+from pathlib import Path
+
+with open('coverage.json', 'r', encoding='utf-8') as fh:
+    data = json.load(fh)
+
+percent = float(data.get('line_percent', 0.0))
+if percent >= 90.0:
+    color = 'brightgreen'
+elif percent >= 75.0:
+    color = 'yellow'
+elif percent >= 50.0:
+    color = 'orange'
+else:
+    color = 'red'
+
+output = os.environ['GITHUB_OUTPUT']
+with open(output, 'a', encoding='utf-8') as fh:
+    fh.write(f"percent={percent:.2f}\n")
+    fh.write(f"color={color}\n")
+PY
+        working-directory: build
+
+      - name: Prepare badges directory
+        run: mkdir -p badges
+
+      - name: Generate coverage badge
+        uses: emibcn/badge-action@v2
+        with:
+          label: Coverage
+          status: "${{ steps.coverage.outputs.percent }}%"
+          color: ${{ steps.coverage.outputs.color }}
+          path: badges/coverage.svg
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-reports
+          path: |
+            build/coverage.xml
+            build/coverage.html
+            build/coverage.json
+            badges/coverage.svg
+          if-no-files-found: error
+
+      - name: Commit coverage badge
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add badges/coverage.svg
+          git commit -m "Update coverage badge" || exit 0
+          git push
