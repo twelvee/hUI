@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.10)
 project(hUI C)
 
 set(CMAKE_C_STANDARD 11)
+include(GNUInstallDirs)
 option(HUI_BUILD_RAYLIB_EXAMPLE "Build the raylib integration example" ON)
 
 file(GLOB SRC
@@ -40,3 +41,10 @@ add_executable(hui_tests tests/test_runner.c)
 target_link_libraries(hui_tests hui)
 target_include_directories(hui_tests PRIVATE src include)
 add_test(NAME hui_tests COMMAND hui_tests)
+
+install(TARGETS hui
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(FILES LICENSE README.md DESTINATION ${CMAKE_INSTALL_DOCDIR})

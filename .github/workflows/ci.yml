@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+env:
+  BUILD_TYPE: Release
+  INSTALL_DIR: ${{ github.workspace }}/install
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Remove previous install dir (Unix)
+        if: runner.os != 'Windows'
+        run: cmake -E rm -rf "$INSTALL_DIR"
+
+      - name: Remove previous install dir (Windows)
+        if: runner.os == 'Windows'
+        run: cmake -E rm -rf "$env:INSTALL_DIR"
+        shell: pwsh
+
+      - name: Configure CMake (Unix)
+        if: runner.os != 'Windows'
+        run: >
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=${BUILD_TYPE}
+          -DHUI_BUILD_RAYLIB_EXAMPLE=OFF
+          -DCMAKE_INSTALL_PREFIX=${INSTALL_DIR}
+
+      - name: Configure CMake (Windows)
+        if: runner.os == 'Windows'
+        run: >
+          cmake -S . -B build
+          -G "Visual Studio 17 2022"
+          -A x64
+          -DCMAKE_BUILD_TYPE=$env:BUILD_TYPE
+          -DHUI_BUILD_RAYLIB_EXAMPLE=OFF
+          -DCMAKE_INSTALL_PREFIX="$env:INSTALL_DIR"
+        shell: pwsh
+
+      - name: Build
+        if: runner.os != 'Windows'
+        run: cmake --build build --config ${BUILD_TYPE} --parallel
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        run: cmake --build build --config $env:BUILD_TYPE --parallel
+        shell: pwsh
+
+      - name: Run tests
+        if: runner.os != 'Windows'
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Run tests (Windows)
+        if: runner.os == 'Windows'
+        run: ctest --test-dir build --output-on-failure --build-config $env:BUILD_TYPE
+        shell: pwsh
+
+      - name: Install
+        if: runner.os != 'Windows'
+        run: cmake --install build --config ${BUILD_TYPE}
+
+      - name: Install (Windows)
+        if: runner.os == 'Windows'
+        run: cmake --install build --config $env:BUILD_TYPE
+        shell: pwsh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hui-${{ runner.os }}-${{ env.BUILD_TYPE }}
+          path: ${{ env.INSTALL_DIR }}
+          if-no-files-found: error
