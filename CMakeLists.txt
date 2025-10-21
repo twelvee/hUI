@@ -42,7 +42,22 @@ enable_testing()
 add_executable(hui_tests tests/test_runner.c)
 target_link_libraries(hui_tests hui)
 target_include_directories(hui_tests PRIVATE src include)
-add_test(NAME hui_tests COMMAND hui_tests)
+set(HUI_TEST_CASES
+    intern
+    html_builder
+    css_parser
+    style_layout_paint
+    filter_spec
+    dom_mutations
+    queries
+    ir_serialization
+    button_text_color
+    font_size_application
+    ctx_pipeline
+)
+foreach(test_name IN LISTS HUI_TEST_CASES)
+    add_test(NAME hui_${test_name} COMMAND hui_tests ${test_name})
+endforeach()
 
 if (HUI_ENABLE_COVERAGE)
     if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")

@@ -292,9 +292,29 @@ static const test_case tests[] = {
     {"ctx_pipeline", test_ctx_pipeline}
 };
 
-int main(void) {
+static int should_run_test(int argc, char **argv, const char *name) {
+    if (argc <= 1) return 1;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--list") == 0) continue;
+        if (strcmp(argv[i], name) == 0) return 1;
+    }
+    return 0;
+}
+
+int main(int argc, char **argv) {
     size_t failed = 0;
-    for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); i++) {
+    size_t executed = 0;
+    size_t total = sizeof(tests) / sizeof(tests[0]);
+    if (argc > 1 && strcmp(argv[1], "--list") == 0) {
+        for (size_t i = 0; i < total; i++) {
+            printf("%s\n", tests[i].name);
+        }
+        return 0;
+    }
+
+    for (size_t i = 0; i < total; i++) {
+        if (!should_run_test(argc, argv, tests[i].name)) continue;
+        executed++;
         current_failed = 0;
         tests[i].fn();
         if (current_failed) {
@@ -304,9 +324,15 @@ int main(void) {
             fprintf(stdout, "[OK] %s\n", tests[i].name);
         }
     }
+
+    if (executed == 0) {
+        fprintf(stderr, "No tests selected.\n");
+        return EXIT_FAILURE;
+    }
+
     fprintf(stdout, "Ran %zu tests: %zu passed, %zu failed\n",
-            sizeof(tests) / sizeof(tests[0]),
-            sizeof(tests) / sizeof(tests[0]) - failed,
+            executed,
+            executed - failed,
             failed);
     return failed ? EXIT_FAILURE : EXIT_SUCCESS;
 }
