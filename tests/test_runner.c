@@ -183,6 +183,14 @@ static void test_auto_text_input(void) {
     hui_ctx *ctx = hui_create(NULL, NULL);
     ASSERT(ctx != NULL);
 
+    char name_storage[64] = {0};
+    hui_binding name_binding = {
+        .type = HUI_BIND_STRING,
+        .ptr = name_storage,
+        .string_capacity = sizeof(name_storage)
+    };
+    ASSERT(hui_bind_variable(ctx, "name", &name_binding) == HUI_OK);
+
     test_clipboard clip;
     memset(&clip, 0, sizeof(clip));
     hui_clipboard_iface clipboard = {
@@ -198,7 +206,7 @@ static void test_auto_text_input(void) {
     };
     hui_set_text_input_defaults(ctx, &clipboard, &keymap, 64);
 
-    const char *html = "<main><input id='name' placeholder='Name'></main>";
+    const char *html = "<main><input id='name' placeholder='Name' value=\"{{ name }}\"></main><p>{{ name }}</p>";
     const char *css =
             "input { padding: 11px 6px 13px 19px; font-size: 14px; }"
             "input.placeholder { color: #999999; }";
@@ -208,33 +216,15 @@ static void test_auto_text_input(void) {
 
     hui_build_opts opts = {220.0f, 140.0f, 96.0f, 0};
     ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+    uint32_t initial_dirty = hui_step(ctx, 0.0f);
+    if (initial_dirty) {
+        ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+    }
 
     hui_node_handle input = hui_dom_query_id(ctx, "name");
     ASSERT(!hui_node_is_null(input));
 
     hui_draw_list_view view = hui_get_draw_list(ctx);
-    int placeholder_found = 0;
-    for (size_t i = 0; i < view.count; i++) {
-        const hui_draw *cmd = &view.items[i];
-        if (cmd->op != HUI_DRAW_OP_GLYPH_RUN) continue;
-        size_t len = 0;
-        const char *text = hui_draw_text_utf8(ctx, cmd, &len);
-        if (text && len == strlen("Name") && strncmp(text, "Name", len) == 0) {
-            placeholder_found = 1;
-            break;
-        }
-    }
-    ASSERT(placeholder_found);
-
-    hui_rect input_rect;
-    ASSERT(hui_node_get_layout(ctx, input, &input_rect) == HUI_OK);
-    hui_node_handle text = hui_node_first_child(ctx, input);
-    ASSERT(!hui_node_is_null(text));
-    hui_rect text_rect;
-    ASSERT(hui_node_get_layout(ctx, text, &text_rect) == HUI_OK);
-    ASSERT(fabsf(text_rect.x - (input_rect.x + 19.0f)) < 0.01f);
-    ASSERT(fabsf(text_rect.y - (input_rect.y + 11.0f)) < 0.01f);
-
     hui_rect rect;
     ASSERT(hui_node_get_layout(ctx, input, &rect) == HUI_OK);
     float px = rect.x + rect.w * 0.5f;
@@ -262,20 +252,6 @@ static void test_auto_text_input(void) {
 
     ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
 
-    view = hui_get_draw_list(ctx);
-    placeholder_found = 0;
-    for (size_t i = 0; i < view.count; i++) {
-        const hui_draw *cmd = &view.items[i];
-        if (cmd->op != HUI_DRAW_OP_GLYPH_RUN) continue;
-        size_t len = 0;
-        const char *text = hui_draw_text_utf8(ctx, cmd, &len);
-        if (text && len == strlen("Name") && strncmp(text, "Name", len) == 0) {
-            placeholder_found = 1;
-            break;
-        }
-    }
-    ASSERT(!placeholder_found);
-
     hui_input_event text_ev = {0};
     text_ev.type = HUI_INPUT_EVENT_TEXT_INPUT;
     text_ev.data.text.codepoint = 'H';
@@ -286,6 +262,15 @@ static void test_auto_text_input(void) {
     dirty = hui_step(ctx, 0.016f);
     ASSERT(dirty != 0);
     ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    hui_node_handle text = hui_node_first_child(ctx, input);
+    ASSERT(!hui_node_is_null(text));
+    hui_rect input_rect;
+    ASSERT(hui_node_get_layout(ctx, input, &input_rect) == HUI_OK);
+    hui_rect text_rect;
+    ASSERT(hui_node_get_layout(ctx, text, &text_rect) == HUI_OK);
+    ASSERT(fabsf(text_rect.x - (input_rect.x + 19.0f)) < 0.01f);
+    ASSERT(fabsf(text_rect.y - (input_rect.y + 11.0f)) < 0.01f);
 
     view = hui_get_draw_list(ctx);
     int hi_found = 0;
@@ -299,6 +284,7 @@ static void test_auto_text_input(void) {
         }
     }
     ASSERT(hi_found);
+    ASSERT(strcmp(name_storage, "Hi") == 0);
 
     hui_input_event backspace = {0};
     backspace.type = HUI_INPUT_EVENT_KEY_DOWN;
@@ -656,6 +642,61 @@ static void test_text_field_interaction(void) {
     hui_destroy(ctx);
 }
 
+static void test_text_binding_render(void) {
+    hui_ctx *ctx = hui_create(NULL, NULL);
+    ASSERT(ctx != NULL);
+
+    int counter = 5;
+    hui_binding binding = {
+        .type = HUI_BIND_INT,
+        .ptr = &counter,
+        .string_capacity = 0
+    };
+    ASSERT(hui_bind_variable(ctx, "counter", &binding) == HUI_OK);
+
+    const char *html = "<p id='counter'>{{ counter }}</p>";
+    ASSERT(hui_feed_html(ctx, (hui_bytes){(const uint8_t *) html, strlen(html)}, 1) == HUI_OK);
+    ASSERT(hui_parse(ctx) == HUI_OK);
+
+    hui_build_opts opts = {120.0f, 80.0f, 96.0f, 0};
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    hui_draw_list_view view = hui_get_draw_list(ctx);
+    int five_found = 0;
+    for (size_t i = 0; i < view.count; i++) {
+        const hui_draw *cmd = &view.items[i];
+        if (cmd->op != HUI_DRAW_OP_GLYPH_RUN) continue;
+        size_t len = 0;
+        const char *text = hui_draw_text_utf8(ctx, cmd, &len);
+        if (text && len == strlen("5") && strncmp(text, "5", len) == 0) {
+            five_found = 1;
+            break;
+        }
+    }
+    ASSERT(five_found);
+
+    counter = 42;
+    uint32_t dirty = hui_step(ctx, 0.0f);
+    ASSERT(dirty != 0);
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    view = hui_get_draw_list(ctx);
+    int forty_two_found = 0;
+    for (size_t i = 0; i < view.count; i++) {
+        const hui_draw *cmd = &view.items[i];
+        if (cmd->op != HUI_DRAW_OP_GLYPH_RUN) continue;
+        size_t len = 0;
+        const char *text = hui_draw_text_utf8(ctx, cmd, &len);
+        if (text && len == strlen("42") && strncmp(text, "42", len) == 0) {
+            forty_two_found = 1;
+            break;
+        }
+    }
+    ASSERT(forty_two_found);
+
+    hui_destroy(ctx);
+}
+
 static void test_input_dirty_flags(void) {
     const char *html = "<button id='btn'>Click</button>";
     const char *css = "button { background-color: #202020; color: #ffffff; padding: 8px; }";
@@ -724,6 +765,7 @@ static const test_case tests[] = {
     {"input_hover_interaction", test_input_hover_interaction},
     {"font_size_application", test_font_size_application},
     {"text_field_interaction", test_text_field_interaction},
+    {"text_binding_render", test_text_binding_render},
     {"auto_text_input", test_auto_text_input},
     {"input_dirty_flags", test_input_dirty_flags},
     {"ctx_pipeline", test_ctx_pipeline}

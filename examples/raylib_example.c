@@ -103,6 +103,21 @@ int main(void) {
 
     hui_set_dom_filter(ctx, only_ui, NULL);
 
+    char name_value[128] = {0};
+    char email_value[128] = {0};
+    hui_binding name_binding = {
+        .type = HUI_BIND_STRING,
+        .ptr = name_value,
+        .string_capacity = sizeof(name_value)
+    };
+    hui_binding email_binding = {
+        .type = HUI_BIND_STRING,
+        .ptr = email_value,
+        .string_capacity = sizeof(email_value)
+    };
+    hui_bind_variable(ctx, "name_value", &name_binding);
+    hui_bind_variable(ctx, "email_value", &email_binding);
+
     const hui_clipboard_iface clipboard = {
         .get_text = raylib_clipboard_get,
         .set_text = raylib_clipboard_set,
@@ -126,12 +141,14 @@ int main(void) {
             "<form class='form-card'>"
             "<div class='field'>"
             "<label for='name-input'>Name</label>"
-            "<input id='name-input' type='text' placeholder='Enter your name'>"
+            "<input id='name-input' type='text' placeholder='Enter your name' value=\"{{ name_value }}\">"
             "</div>"
             "<div class='field'>"
             "<label for='email-input'>Email</label>"
-            "<input id='email-input' type='email' placeholder='email@example.com'>"
+            "<input id='email-input' type='email' placeholder='email@example.com' value=\"{{ email_value }}\">"
             "</div>"
+            "<p class='preview'>Your name: <span class='value'>{{ name_value }}</span></p>"
+            "<p class='preview'>Your email: <span class='value'>{{ email_value }}</span></p>"
             "<div class='actions'>"
             "<button id='play'>Play</button>"
             "<button id='quit'>Quit</button>"
@@ -159,6 +176,8 @@ int main(void) {
             "div.actions { margin-top: 8px; }"
             "div.actions button { background-color: #2d2d30; color: #ffffff; padding: 12px 24px; margin-right: 12px; font-size: 24px; border-radius: 8px; }"
             "div.actions button:hover { background-color: #3b8ad9; color: #ffffff; }"
+            "p.preview { margin: 12px 0; color: #bbbbbb; font-size: 16px; }"
+            "p.preview span.value { color: #f0f0f0; }"
             "footer { background-color: #2d2d30; color: #bbbbbb; padding: 16px; margin-top: 24px; }";
 
     if (hui_feed_html(ctx, (hui_bytes){(const uint8_t *) html, strlen(html)}, 1) != HUI_OK) {

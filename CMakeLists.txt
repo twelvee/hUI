@@ -56,6 +56,7 @@ set(HUI_TEST_CASES
     input_hover_interaction
     font_size_application
     text_field_interaction
+    text_binding_render
     auto_text_input
     input_dirty_flags
     ctx_pipeline

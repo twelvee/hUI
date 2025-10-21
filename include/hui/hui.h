@@ -295,6 +295,22 @@ size_t hui_text_field_length(const hui_text_field *field);
 
 uint32_t hui_text_field_set_text(hui_ctx *ctx, hui_text_field *field, const char *text_utf8);
 
+typedef enum {
+    HUI_BIND_INT = 1,
+    HUI_BIND_FLOAT = 2,
+    HUI_BIND_STRING = 3
+} hui_binding_type;
+
+typedef struct {
+    hui_binding_type type;
+    void *ptr;
+    size_t string_capacity;
+} hui_binding;
+
+int hui_bind_variable(hui_ctx *ctx, const char *name, const hui_binding *binding);
+
+int hui_unbind_variable(hui_ctx *ctx, const char *name);
+
 void hui_set_text_input_defaults(hui_ctx *ctx, const hui_clipboard_iface *clipboard,
                                  const hui_text_field_keymap *keymap, size_t buffer_capacity);
 

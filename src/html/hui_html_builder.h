@@ -38,6 +38,10 @@ typedef struct hui_dom_node {
     uint32_t attr_placeholder_len;
     const char *attr_value;
     uint32_t attr_value_len;
+    hui_atom binding_text_atom;
+    hui_atom binding_value_atom;
+    uint32_t binding_text_index;
+    uint32_t binding_value_index;
 } hui_dom_node;
 
 typedef struct {
