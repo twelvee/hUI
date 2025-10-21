@@ -53,6 +53,7 @@ set(HUI_TEST_CASES
     queries
     ir_serialization
     button_text_color
+    input_hover_interaction
     font_size_application
     ctx_pipeline
 )

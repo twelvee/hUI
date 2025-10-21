@@ -191,6 +191,16 @@ static void test_ir_serialization(void) {
     hui_draw_list_reset(&list);
 }
 
+static uint32_t find_rect_color_for_node(hui_ctx *ctx, uint32_t node_index) {
+    hui_draw_list_view view = hui_get_draw_list(ctx);
+    for (size_t i = 0; i < view.count; i++) {
+        const hui_draw *cmd = &view.items[i];
+        if (cmd->op == HUI_DRAW_OP_RECT && cmd->u1 == node_index)
+            return cmd->u0;
+    }
+    return 0;
+}
+
 static void test_button_text_color(void) {
     const char *html =
             "<!doctype html><html><body>"
@@ -220,6 +230,66 @@ static void test_button_text_color(void) {
         }
     }
     ASSERT(play_found);
+    hui_destroy(ctx);
+}
+
+static void test_input_hover_interaction(void) {
+    const char *html = "<!doctype html><html><body><button id='btn'>Click</button></body></html>";
+    const char *css =
+            "button { background-color: #202020; width: 100px; height: 40px; }"
+            "button:hover { background-color: #ff0000; }";
+    hui_ctx *ctx = hui_create(NULL, NULL);
+    ASSERT(ctx != NULL);
+    ASSERT(hui_feed_html(ctx, (hui_bytes){(const uint8_t *) html, strlen(html)}, 1) == HUI_OK);
+    ASSERT(hui_feed_css(ctx, (hui_bytes){(const uint8_t *) css, strlen(css)}, 1) == HUI_OK);
+    ASSERT(hui_parse(ctx) == HUI_OK);
+    hui_build_opts opts = {200.0f, 200.0f, 96.0f, 0};
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    hui_node_handle btn = hui_dom_query_id(ctx, "btn");
+    ASSERT(!hui_node_is_null(btn));
+
+    uint32_t base_color = find_rect_color_for_node(ctx, btn.index);
+    ASSERT(base_color == 0xFF202020u);
+
+    hui_input_event move;
+    memset(&move, 0, sizeof(move));
+    move.type = HUI_INPUT_EVENT_POINTER_MOVE;
+    move.data.pointer_move.x = 10.0f;
+    move.data.pointer_move.y = 10.0f;
+    ASSERT(hui_push_input(ctx, &move) == HUI_OK);
+
+    hui_input_event down;
+    memset(&down, 0, sizeof(down));
+    down.type = HUI_INPUT_EVENT_POINTER_BUTTON;
+    down.data.pointer_button.x = 12.0f;
+    down.data.pointer_button.y = 12.0f;
+    down.data.pointer_button.buttons = HUI_POINTER_BUTTON_PRIMARY;
+    ASSERT(hui_push_input(ctx, &down) == HUI_OK);
+
+    uint32_t dirty = hui_process_input(ctx);
+    ASSERT(dirty != 0);
+    ASSERT((dirty & HUI_DIRTY_STYLE) != 0);
+    ASSERT(hui_process_input(ctx) == 0);
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    uint32_t hover_color = find_rect_color_for_node(ctx, btn.index);
+    ASSERT(hover_color == 0xFFFF0000u);
+
+    hui_input_event leave;
+    memset(&leave, 0, sizeof(leave));
+    leave.type = HUI_INPUT_EVENT_POINTER_LEAVE;
+    ASSERT(hui_push_input(ctx, &leave) == HUI_OK);
+
+    dirty = hui_process_input(ctx);
+    ASSERT(dirty != 0);
+    ASSERT((dirty & HUI_DIRTY_STYLE) != 0);
+    ASSERT(hui_process_input(ctx) == 0);
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    uint32_t reset_color = find_rect_color_for_node(ctx, btn.index);
+    ASSERT(reset_color == 0xFF202020u);
+
     hui_destroy(ctx);
 }
 
@@ -288,6 +358,7 @@ static const test_case tests[] = {
     {"queries", test_queries},
     {"ir_serialization", test_ir_serialization},
     {"button_text_color", test_button_text_color},
+    {"input_hover_interaction", test_input_hover_interaction},
     {"font_size_application", test_font_size_application},
     {"ctx_pipeline", test_ctx_pipeline}
 };
