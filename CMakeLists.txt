@@ -22,7 +22,7 @@ add_library(hui STATIC ${SRC})
 target_include_directories(hui PUBLIC include src)
 
 add_executable(example examples/minimal.c)
-target_link_libraries(example hui)
+target_link_libraries(example PRIVATE hui)
 
 if (HUI_BUILD_RAYLIB_EXAMPLE)
     include(FetchContent)
@@ -41,7 +41,7 @@ endif()
 
 enable_testing()
 add_executable(hui_tests tests/test_runner.c)
-target_link_libraries(hui_tests hui)
+target_link_libraries(hui_tests PRIVATE hui)
 target_include_directories(hui_tests PRIVATE src include)
 set(HUI_TEST_CASES
     intern
