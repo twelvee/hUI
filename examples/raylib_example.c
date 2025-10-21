@@ -54,6 +54,7 @@ static hui_filter_decision only_ui(const hui_tag_probe *probe, void *user) {
         {HUI_HTML_TAG_BUTTON, sizeof(HUI_HTML_TAG_BUTTON) - 1},
         {HUI_HTML_TAG_DIV, sizeof(HUI_HTML_TAG_DIV) - 1},
         {HUI_HTML_TAG_SPAN, sizeof(HUI_HTML_TAG_SPAN) - 1},
+        {HUI_HTML_TAG_INPUT, sizeof(HUI_HTML_TAG_INPUT) - 1},
     };
     for (size_t i = 0; i < sizeof(keep) / sizeof(keep[0]); i++) {
         const hui_html_tag_entry *tag = &keep[i];
@@ -102,6 +103,19 @@ int main(void) {
 
     hui_set_dom_filter(ctx, only_ui, NULL);
 
+    const hui_clipboard_iface clipboard = {
+        .get_text = raylib_clipboard_get,
+        .set_text = raylib_clipboard_set,
+        .user = NULL
+    };
+    const hui_text_field_keymap keymap = {
+        .backspace = KEY_BACKSPACE,
+        .select_all = KEY_A,
+        .copy = KEY_C,
+        .paste = KEY_V
+    };
+    hui_set_text_input_defaults(ctx, &clipboard, &keymap, 128);
+
     const char *html =
             "<!doctype html><html><body>"
             "<header class='bar'><h1 id='title'>Hello, hUI!</h1></header>"
@@ -111,12 +125,12 @@ int main(void) {
             "<p class='lead'>Fill the form and press play to experience the flow.</p>"
             "<form class='form-card'>"
             "<div class='field'>"
-            "<label for='name-value'>Name</label>"
-            "<div id='name-input' class='input'><span id='name-value'></span></div>"
+            "<label for='name-input'>Name</label>"
+            "<input id='name-input' type='text' placeholder='Enter your name'>"
             "</div>"
             "<div class='field'>"
-            "<label for='email-value'>Email</label>"
-            "<div id='email-input' class='input'><span id='email-value'></span></div>"
+            "<label for='email-input'>Email</label>"
+            "<input id='email-input' type='email' placeholder='email@example.com'>"
             "</div>"
             "<div class='actions'>"
             "<button id='play'>Play</button>"
@@ -138,11 +152,10 @@ int main(void) {
             "form.form-card { margin-top: 12px; }"
             "div.field { margin-bottom: 18px; }"
             "div.field label { display: block; font-size: 16px; color: #bbbbbb; margin-bottom: 6px; }"
-            "div.input { background-color: #2d2d30; padding: 12px 16px; border-radius: 8px; border: 2px solid #2d2d30; }"
-            "div.input span { display: block; font-size: 20px; color: #f0f0f0; }"
-            "div.input.placeholder span { color: #666666; }"
-            "div.input.active { border-color: #3b8ad9; background-color: #313135; }"
-            "div.input.selected span { background-color: #3b8ad9; color: #101418; padding: 0 4px; border-radius: 4px; }"
+            "input { background-color: #2d2d30; color: #f0f0f0; padding: 12px 16px; border-radius: 8px; border: 2px solid #2d2d30; display: block; width: 100%; box-sizing: border-box; font-size: 20px; }"
+            "input.placeholder { color: #666666; }"
+            "input.active { border-color: #3b8ad9; background-color: #313135; }"
+            "input.selected { background-color: #3b8ad9; color: #101418; }"
             "div.actions { margin-top: 8px; }"
             "div.actions button { background-color: #2d2d30; color: #ffffff; padding: 12px 24px; margin-right: 12px; font-size: 24px; border-radius: 8px; }"
             "div.actions button:hover { background-color: #3b8ad9; color: #ffffff; }"
@@ -165,55 +178,6 @@ int main(void) {
         hui_destroy(ctx);
         CloseWindow();
         return 1;
-    }
-
-    char name_buffer[128] = {0};
-    char email_buffer[128] = {0};
-    hui_text_field fields[2];
-    size_t field_count = 0;
-
-    const hui_clipboard_iface clipboard = {
-        .get_text = raylib_clipboard_get,
-        .set_text = raylib_clipboard_set,
-        .user = NULL
-    };
-    const hui_text_field_keymap keymap = {
-        .backspace = KEY_BACKSPACE,
-        .select_all = KEY_A,
-        .copy = KEY_C,
-        .paste = KEY_V
-    };
-
-    hui_text_field_desc name_desc = {
-        .container_id = "name-input",
-        .value_id = "name-value",
-        .placeholder = "Enter your name",
-        .buffer = name_buffer,
-        .buffer_capacity = sizeof(name_buffer),
-        .clipboard = &clipboard,
-        .keymap = &keymap
-    };
-    if (field_count < sizeof(fields) / sizeof(fields[0]) &&
-        hui_text_field_init(ctx, &fields[field_count], &name_desc) == HUI_OK) {
-        field_count++;
-    } else {
-        TraceLog(LOG_WARNING, "Failed to initialise name input field");
-    }
-
-    hui_text_field_desc email_desc = {
-        .container_id = "email-input",
-        .value_id = "email-value",
-        .placeholder = "email@example.com",
-        .buffer = email_buffer,
-        .buffer_capacity = sizeof(email_buffer),
-        .clipboard = &clipboard,
-        .keymap = &keymap
-    };
-    if (field_count < sizeof(fields) / sizeof(fields[0]) &&
-        hui_text_field_init(ctx, &fields[field_count], &email_desc) == HUI_OK) {
-        field_count++;
-    } else {
-        TraceLog(LOG_WARNING, "Failed to initialise email input field");
     }
 
     hui_build_opts opts = {(float) GetRenderWidth(), (float) GetRenderHeight(), 96.0f, 0};
@@ -328,10 +292,7 @@ int main(void) {
             hui_push_input(ctx, &text_event);
         }
 
-        dirty |= hui_process_input(ctx);
-        for (size_t i = 0; i < field_count; i++) {
-            dirty |= hui_text_field_step(ctx, &fields[i], frame_dt);
-        }
+        dirty |= hui_step(ctx, frame_dt);
         if (dirty) {
             if (hui_build_ir(ctx, &opts) != HUI_OK) {
                 TraceLog(LOG_WARNING, "Rebuild failed: %s", hui_last_error(ctx));

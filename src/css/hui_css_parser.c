@@ -18,6 +18,45 @@ static float parse_float_token(const char *s, size_t n) {
     return (float) atof(buf);
 }
 
+static int parse_px_shorthand(const char *s, size_t n, float out[4]) {
+    float vals[4] = {0};
+    size_t count = 0;
+    size_t i = 0;
+    while (i < n) {
+        while (i < n && isspace((unsigned char) s[i])) i++;
+        if (i >= n) break;
+        size_t start = i;
+        while (i < n && !isspace((unsigned char) s[i])) i++;
+        size_t tok_len = i - start;
+        if (tok_len == 0 || count >= 4) return -1;
+        size_t num_len = tok_len;
+        if (tok_len >= 2 && strncmp(s + start + tok_len - 2, "px", 2) == 0) {
+            num_len -= 2;
+        } else {
+            int all_zero = 1;
+            for (size_t k = 0; k < tok_len; k++) {
+                char c = s[start + k];
+                if (!(c == '0' || c == '.' || c == '+' || c == '-')) {
+                    all_zero = 0;
+                    break;
+                }
+            }
+            if (!all_zero) return -1;
+        }
+        vals[count++] = parse_float_token(s + start, num_len);
+    }
+    if (count == 0) return -1;
+    float top = vals[0];
+    float right = (count >= 2) ? vals[1] : top;
+    float bottom = (count >= 3) ? vals[2] : top;
+    float left = (count == 4) ? vals[3] : right;
+    out[0] = top;
+    out[1] = right;
+    out[2] = bottom;
+    out[3] = left;
+    return 0;
+}
+
 static void skip_ws(const char *s, size_t n, size_t *i) {
     while (*i < n) {
         if (isspace((unsigned char) s[*i])) {
@@ -219,32 +258,38 @@ int hui_css_parse(hui_stylesheet *sheet, hui_intern *atoms, const char *css, siz
                     decl.val.num = parse_float_token(css + value_start, value_len - 2);
                 }
             } else if (name_len >= 6 && strncmp(css + name_start, "margin", 6) == 0) {
-                if (value_len > 2 && strncmp(css + value_start + value_len - 2, "px", 2) == 0) {
-                    float px = parse_float_token(css + value_start, value_len - 2);
-                    decl.id = HUI_DECL_MARGIN_TOP;
+                float sides[4];
+                if (parse_px_shorthand(css + value_start, value_len, sides) == 0) {
                     decl.val.kind = HUI_VAL_PX;
-                    decl.val.num = px;
+                    decl.id = HUI_DECL_MARGIN_TOP;
+                    decl.val.num = sides[0];
                     hui_vec_push(&rule.decls, decl);
                     decl.id = HUI_DECL_MARGIN_RIGHT;
+                    decl.val.num = sides[1];
                     hui_vec_push(&rule.decls, decl);
                     decl.id = HUI_DECL_MARGIN_BOTTOM;
+                    decl.val.num = sides[2];
                     hui_vec_push(&rule.decls, decl);
                     decl.id = HUI_DECL_MARGIN_LEFT;
+                    decl.val.num = sides[3];
                     hui_vec_push(&rule.decls, decl);
                     goto after_push;
                 }
             } else if (name_len >= 7 && strncmp(css + name_start, "padding", 7) == 0) {
-                if (value_len > 2 && strncmp(css + value_start + value_len - 2, "px", 2) == 0) {
-                    float px = parse_float_token(css + value_start, value_len - 2);
-                    decl.id = HUI_DECL_PADDING_TOP;
+                float sides[4];
+                if (parse_px_shorthand(css + value_start, value_len, sides) == 0) {
                     decl.val.kind = HUI_VAL_PX;
-                    decl.val.num = px;
+                    decl.id = HUI_DECL_PADDING_TOP;
+                    decl.val.num = sides[0];
                     hui_vec_push(&rule.decls, decl);
                     decl.id = HUI_DECL_PADDING_RIGHT;
+                    decl.val.num = sides[1];
                     hui_vec_push(&rule.decls, decl);
                     decl.id = HUI_DECL_PADDING_BOTTOM;
+                    decl.val.num = sides[2];
                     hui_vec_push(&rule.decls, decl);
                     decl.id = HUI_DECL_PADDING_LEFT;
+                    decl.val.num = sides[3];
                     hui_vec_push(&rule.decls, decl);
                     goto after_push;
                 }

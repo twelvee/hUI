@@ -15,6 +15,18 @@
 #include <string.h>
 #include <stdio.h>
 
+typedef struct {
+    hui_text_field field;
+    char *buffer;
+    size_t buffer_capacity;
+    char *placeholder;
+} hui_auto_text_field;
+
+static void hui_auto_text_fields_reset(hui_ctx *ctx);
+static int hui_auto_text_fields_rebuild(hui_ctx *ctx);
+static uint32_t hui_auto_text_fields_step(hui_ctx *ctx, float dt);
+static int hui_node_is_text_input(hui_ctx *ctx, const hui_dom_node *node);
+
 struct hui_ctx {
     void * (*alloc_fn)(size_t);
 
@@ -54,6 +66,17 @@ struct hui_ctx {
     HUI_VEC(uint32_t) key_released;
     HUI_VEC(uint32_t) key_held;
     hui_input_state input_state;
+    HUI_VEC(hui_auto_text_field) auto_text_fields;
+    struct {
+        hui_clipboard_iface clipboard;
+        int clipboard_set;
+        hui_text_field_keymap keymap;
+        int keymap_set;
+        float backspace_initial_delay;
+        float backspace_repeat_delay;
+        int delays_set;
+        size_t buffer_capacity;
+    } text_input_defaults;
     char last_error[256];
 };
 
@@ -74,6 +97,7 @@ hui_ctx *hui_create(void * (*alloc_fn)(size_t), void (*free_fn)(void *)) {
     hui_css_init(&ctx->stylesheet);
     hui_style_store_init(&ctx->styles);
     hui_draw_list_init(&ctx->draw);
+    hui_vec_init(&ctx->auto_text_fields);
     ctx->filter_spec.max_depth = -1;
     ctx->filter_spec.max_nodes = 0;
     ctx->filter_spec.flags = 0;
@@ -97,7 +121,130 @@ hui_ctx *hui_create(void * (*alloc_fn)(size_t), void (*free_fn)(void *)) {
     memset(&ctx->input_state, 0, sizeof(ctx->input_state));
     ctx->input_state.hovered = HUI_NODE_NULL;
     ctx->input_state.focus = HUI_NODE_NULL;
+    ctx->text_input_defaults.clipboard_set = 0;
+    ctx->text_input_defaults.keymap_set = 0;
+    ctx->text_input_defaults.backspace_initial_delay = 0.0f;
+    ctx->text_input_defaults.backspace_repeat_delay = 0.0f;
+    ctx->text_input_defaults.delays_set = 0;
+    ctx->text_input_defaults.buffer_capacity = 256;
     return ctx;
+}
+
+static void hui_auto_text_fields_reset(hui_ctx *ctx) {
+    if (!ctx) return;
+    for (size_t i = 0; i < ctx->auto_text_fields.len; i++) {
+        hui_auto_text_field *auto_field = &ctx->auto_text_fields.data[i];
+        if (auto_field->buffer) {
+            ctx->free_fn(auto_field->buffer);
+            auto_field->buffer = NULL;
+        }
+        if (auto_field->placeholder) {
+            ctx->free_fn(auto_field->placeholder);
+            auto_field->placeholder = NULL;
+        }
+        auto_field->buffer_capacity = 0;
+        memset(&auto_field->field, 0, sizeof(auto_field->field));
+    }
+    ctx->auto_text_fields.len = 0;
+}
+
+static int hui_node_is_text_input(hui_ctx *ctx, const hui_dom_node *node) {
+    if (!ctx || !node) return 0;
+    if (node->type != HUI_NODE_ELEM) return 0;
+    hui_atom input_atom = hui_intern_put(&ctx->atoms, "input", strlen("input"));
+    if (node->tag != input_atom) return 0;
+    if (node->attr_type == 0) return 1;
+    hui_atom text_atom = hui_intern_put(&ctx->atoms, "text", strlen("text"));
+    hui_atom email_atom = hui_intern_put(&ctx->atoms, "email", strlen("email"));
+    hui_atom password_atom = hui_intern_put(&ctx->atoms, "password", strlen("password"));
+    return node->attr_type == text_atom ||
+           node->attr_type == email_atom ||
+           node->attr_type == password_atom;
+}
+
+static int hui_auto_text_fields_rebuild(hui_ctx *ctx) {
+    if (!ctx) return HUI_EINVAL;
+    hui_auto_text_fields_reset(ctx);
+    if (ctx->dom.nodes.len == 0) return HUI_OK;
+
+    size_t capacity_default = ctx->text_input_defaults.buffer_capacity;
+    if (capacity_default < 16) capacity_default = 256;
+
+    for (size_t i = 0; i < ctx->dom.nodes.len; i++) {
+        hui_dom_node *node = &ctx->dom.nodes.data[i];
+        if (!hui_node_is_text_input(ctx, node)) continue;
+
+        hui_auto_text_field auto_field;
+        memset(&auto_field, 0, sizeof(auto_field));
+        auto_field.buffer_capacity = capacity_default;
+        auto_field.buffer = (char *) ctx->alloc_fn(auto_field.buffer_capacity);
+        if (!auto_field.buffer) {
+            hui_auto_text_fields_reset(ctx);
+            return HUI_ENOMEM;
+        }
+        auto_field.buffer[0] = '\0';
+
+        if (node->attr_placeholder && node->attr_placeholder_len > 0) {
+            auto_field.placeholder = (char *) ctx->alloc_fn(node->attr_placeholder_len + 1);
+            if (!auto_field.placeholder) {
+                ctx->free_fn(auto_field.buffer);
+                hui_auto_text_fields_reset(ctx);
+                return HUI_ENOMEM;
+            }
+            memcpy(auto_field.placeholder, node->attr_placeholder, node->attr_placeholder_len);
+            auto_field.placeholder[node->attr_placeholder_len] = '\0';
+        }
+
+        hui_text_field_desc desc;
+        memset(&desc, 0, sizeof(desc));
+        desc.container = (hui_node_handle){(uint32_t) i, node->gen};
+        desc.value = desc.container;
+        desc.placeholder = auto_field.placeholder;
+        desc.buffer = auto_field.buffer;
+        desc.buffer_capacity = auto_field.buffer_capacity;
+        if (ctx->text_input_defaults.clipboard_set)
+            desc.clipboard = &ctx->text_input_defaults.clipboard;
+        if (ctx->text_input_defaults.keymap_set)
+            desc.keymap = &ctx->text_input_defaults.keymap;
+        if (ctx->text_input_defaults.delays_set) {
+            desc.backspace_initial_delay = ctx->text_input_defaults.backspace_initial_delay;
+            desc.backspace_repeat_delay = ctx->text_input_defaults.backspace_repeat_delay;
+        }
+
+        if (hui_text_field_init(ctx, &auto_field.field, &desc) != HUI_OK) {
+            ctx->free_fn(auto_field.buffer);
+            if (auto_field.placeholder) ctx->free_fn(auto_field.placeholder);
+            hui_auto_text_fields_reset(ctx);
+            return HUI_EINVAL;
+        }
+
+        if (node->attr_value && node->attr_value_len > 0) {
+            char *initial_text = (char *) ctx->alloc_fn(node->attr_value_len + 1);
+            if (!initial_text) {
+                if (auto_field.placeholder) ctx->free_fn(auto_field.placeholder);
+                ctx->free_fn(auto_field.buffer);
+                hui_auto_text_fields_reset(ctx);
+                return HUI_ENOMEM;
+            }
+            memcpy(initial_text, node->attr_value, node->attr_value_len);
+            initial_text[node->attr_value_len] = '\0';
+            hui_text_field_set_text(ctx, &auto_field.field, initial_text);
+            ctx->free_fn(initial_text);
+        }
+
+        hui_vec_push(&ctx->auto_text_fields, auto_field);
+    }
+
+    return HUI_OK;
+}
+
+static uint32_t hui_auto_text_fields_step(hui_ctx *ctx, float dt) {
+    if (!ctx) return 0;
+    uint32_t dirty = 0;
+    for (size_t i = 0; i < ctx->auto_text_fields.len; i++) {
+        dirty |= hui_text_field_step(ctx, &ctx->auto_text_fields.data[i].field, dt);
+    }
+    return dirty;
 }
 
 void hui_destroy(hui_ctx *ctx) {
@@ -114,6 +261,8 @@ void hui_destroy(hui_ctx *ctx) {
     hui_vec_free(&ctx->key_pressed);
     hui_vec_free(&ctx->key_released);
     hui_vec_free(&ctx->key_held);
+    hui_auto_text_fields_reset(ctx);
+    hui_vec_free(&ctx->auto_text_fields);
     ctx->free_fn(ctx);
 }
 
@@ -174,6 +323,7 @@ int hui_parse(hui_ctx *ctx) {
         hui_set_error(ctx, "no HTML");
         return HUI_EPARSE;
     }
+    hui_auto_text_fields_reset(ctx);
     hui_dom_reset(&ctx->dom);
     hui_dom_init(&ctx->dom);
     hui_builder builder;
@@ -196,6 +346,8 @@ int hui_parse(hui_ctx *ctx) {
             return HUI_EPARSE;
         }
     }
+    int auto_r = hui_auto_text_fields_rebuild(ctx);
+    if (auto_r != HUI_OK) return auto_r;
     return HUI_OK;
 }
 
@@ -384,6 +536,52 @@ uint32_t hui_process_input(hui_ctx *ctx) {
     ctx->input_state.keys_released.data = ctx->key_released.data;
     ctx->input_state.keys_released.count = ctx->key_released.len;
     return dirty;
+}
+
+uint32_t hui_step(hui_ctx *ctx, float dt) {
+    if (!ctx) return 0u;
+    uint32_t dirty = hui_process_input(ctx);
+    dirty |= hui_auto_text_fields_step(ctx, dt);
+    return dirty;
+}
+
+void hui_set_text_input_defaults(hui_ctx *ctx, const hui_clipboard_iface *clipboard,
+                                 const hui_text_field_keymap *keymap, size_t buffer_capacity) {
+    if (!ctx) return;
+    if (clipboard) {
+        ctx->text_input_defaults.clipboard = *clipboard;
+        ctx->text_input_defaults.clipboard_set =
+                clipboard->get_text != NULL || clipboard->set_text != NULL;
+    } else {
+        memset(&ctx->text_input_defaults.clipboard, 0, sizeof(ctx->text_input_defaults.clipboard));
+        ctx->text_input_defaults.clipboard_set = 0;
+    }
+    if (keymap) {
+        ctx->text_input_defaults.keymap = *keymap;
+        ctx->text_input_defaults.keymap_set = 1;
+    } else {
+        memset(&ctx->text_input_defaults.keymap, 0, sizeof(ctx->text_input_defaults.keymap));
+        ctx->text_input_defaults.keymap_set = 0;
+    }
+    if (buffer_capacity >= 16)
+        ctx->text_input_defaults.buffer_capacity = buffer_capacity;
+    if (ctx->dom.nodes.len > 0)
+        hui_auto_text_fields_rebuild(ctx);
+}
+
+void hui_set_text_input_repeat(hui_ctx *ctx, float initial_delay, float repeat_delay) {
+    if (!ctx) return;
+    if (initial_delay > 0.0f && repeat_delay > 0.0f) {
+        ctx->text_input_defaults.backspace_initial_delay = initial_delay;
+        ctx->text_input_defaults.backspace_repeat_delay = repeat_delay;
+        ctx->text_input_defaults.delays_set = 1;
+    } else {
+        ctx->text_input_defaults.backspace_initial_delay = 0.0f;
+        ctx->text_input_defaults.backspace_repeat_delay = 0.0f;
+        ctx->text_input_defaults.delays_set = 0;
+    }
+    if (ctx->dom.nodes.len > 0)
+        hui_auto_text_fields_rebuild(ctx);
 }
 
 hui_ir_view hui_get_ir(hui_ctx *ctx) {

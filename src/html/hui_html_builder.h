@@ -33,6 +33,11 @@ typedef struct hui_dom_node {
     HUI_VEC (hui_atom) classes;
     const char *text;
     uint32_t text_len;
+    hui_atom attr_type;
+    const char *attr_placeholder;
+    uint32_t attr_placeholder_len;
+    const char *attr_value;
+    uint32_t attr_value_len;
 } hui_dom_node;
 
 typedef struct {

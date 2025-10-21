@@ -26,7 +26,9 @@ void hui_html_lexer_init(hui_html_lexer *lexer, const char *data, size_t len) {
 static void reset_token(hui_token *tk, hui_token_kind kind) {
     tk->kind = kind;
     tk->text.p = tk->tag.p = tk->id.p = tk->class_attr.p = NULL;
+    tk->type_attr.p = tk->placeholder_attr.p = tk->value_attr.p = NULL;
     tk->text.n = tk->tag.n = tk->id.n = tk->class_attr.n = 0;
+    tk->type_attr.n = tk->placeholder_attr.n = tk->value_attr.n = 0;
 }
 
 int hui_html_next(hui_html_lexer *lexer, hui_token *out) {
@@ -89,6 +91,9 @@ int hui_html_next(hui_html_lexer *lexer, hui_token *out) {
     size_t tag_len = i - tag_start;
     hui_slice id = {0};
     hui_slice class_attr = {0};
+    hui_slice type_attr = {0};
+    hui_slice placeholder_attr = {0};
+    hui_slice value_attr = {0};
 
     while (i < n) {
         skip_ws(s, n, &i);
@@ -100,6 +105,9 @@ int hui_html_next(hui_html_lexer *lexer, hui_token *out) {
             out->tag.n = tag_len;
             out->id = id;
             out->class_attr = class_attr;
+            out->type_attr = type_attr;
+            out->placeholder_attr = placeholder_attr;
+            out->value_attr = value_attr;
             lexer->pos = i;
             return 1;
         }
@@ -110,6 +118,9 @@ int hui_html_next(hui_html_lexer *lexer, hui_token *out) {
             out->tag.n = tag_len;
             out->id = id;
             out->class_attr = class_attr;
+            out->type_attr = type_attr;
+            out->placeholder_attr = placeholder_attr;
+            out->value_attr = value_attr;
             lexer->pos = i;
             return 1;
         }
@@ -139,6 +150,9 @@ int hui_html_next(hui_html_lexer *lexer, hui_token *out) {
         hui_slice name = {s + attr_start, attr_len};
         if (slice_eq(name, "id")) id = value;
         else if (slice_eq(name, "class")) class_attr = value;
+        else if (slice_eq(name, "type")) type_attr = value;
+        else if (slice_eq(name, "placeholder")) placeholder_attr = value;
+        else if (slice_eq(name, "value")) value_attr = value;
     }
 
     reset_token(out, HUI_TK_ERR);

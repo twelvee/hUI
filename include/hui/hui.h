@@ -295,6 +295,13 @@ size_t hui_text_field_length(const hui_text_field *field);
 
 uint32_t hui_text_field_set_text(hui_ctx *ctx, hui_text_field *field, const char *text_utf8);
 
+void hui_set_text_input_defaults(hui_ctx *ctx, const hui_clipboard_iface *clipboard,
+                                 const hui_text_field_keymap *keymap, size_t buffer_capacity);
+
+void hui_set_text_input_repeat(hui_ctx *ctx, float initial_delay, float repeat_delay);
+
+uint32_t hui_step(hui_ctx *ctx, float dt);
+
 #ifdef __cplusplus
 }
 #endif

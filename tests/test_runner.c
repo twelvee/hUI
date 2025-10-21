@@ -179,6 +179,153 @@ static void test_dom_mutations(void) {
     hui_destroy(ctx);
 }
 
+static void test_auto_text_input(void) {
+    hui_ctx *ctx = hui_create(NULL, NULL);
+    ASSERT(ctx != NULL);
+
+    test_clipboard clip;
+    memset(&clip, 0, sizeof(clip));
+    hui_clipboard_iface clipboard = {
+        .get_text = test_clipboard_get,
+        .set_text = test_clipboard_set,
+        .user = &clip
+    };
+    hui_text_field_keymap keymap = {
+        .backspace = 8,
+        .select_all = 'A',
+        .copy = 'C',
+        .paste = 'V'
+    };
+    hui_set_text_input_defaults(ctx, &clipboard, &keymap, 64);
+
+    const char *html = "<main><input id='name' placeholder='Name'></main>";
+    const char *css =
+            "input { padding: 11px 6px 13px 19px; font-size: 14px; }"
+            "input.placeholder { color: #999999; }";
+    ASSERT(hui_feed_html(ctx, (hui_bytes){(const uint8_t *) html, strlen(html)}, 1) == HUI_OK);
+    ASSERT(hui_feed_css(ctx, (hui_bytes){(const uint8_t *) css, strlen(css)}, 1) == HUI_OK);
+    ASSERT(hui_parse(ctx) == HUI_OK);
+
+    hui_build_opts opts = {220.0f, 140.0f, 96.0f, 0};
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    hui_node_handle input = hui_dom_query_id(ctx, "name");
+    ASSERT(!hui_node_is_null(input));
+
+    hui_draw_list_view view = hui_get_draw_list(ctx);
+    int placeholder_found = 0;
+    for (size_t i = 0; i < view.count; i++) {
+        const hui_draw *cmd = &view.items[i];
+        if (cmd->op != HUI_DRAW_OP_GLYPH_RUN) continue;
+        size_t len = 0;
+        const char *text = hui_draw_text_utf8(ctx, cmd, &len);
+        if (text && len == strlen("Name") && strncmp(text, "Name", len) == 0) {
+            placeholder_found = 1;
+            break;
+        }
+    }
+    ASSERT(placeholder_found);
+
+    hui_rect input_rect;
+    ASSERT(hui_node_get_layout(ctx, input, &input_rect) == HUI_OK);
+    hui_node_handle text = hui_node_first_child(ctx, input);
+    ASSERT(!hui_node_is_null(text));
+    hui_rect text_rect;
+    ASSERT(hui_node_get_layout(ctx, text, &text_rect) == HUI_OK);
+    ASSERT(fabsf(text_rect.x - (input_rect.x + 19.0f)) < 0.01f);
+    ASSERT(fabsf(text_rect.y - (input_rect.y + 11.0f)) < 0.01f);
+
+    hui_rect rect;
+    ASSERT(hui_node_get_layout(ctx, input, &rect) == HUI_OK);
+    float px = rect.x + rect.w * 0.5f;
+    float py = rect.y + rect.h * 0.5f;
+
+    hui_input_event move = {0};
+    move.type = HUI_INPUT_EVENT_POINTER_MOVE;
+    move.data.pointer_move.x = px;
+    move.data.pointer_move.y = py;
+    ASSERT(hui_push_input(ctx, &move) == HUI_OK);
+
+    hui_input_event press = {0};
+    press.type = HUI_INPUT_EVENT_POINTER_BUTTON;
+    press.data.pointer_button.x = px;
+    press.data.pointer_button.y = py;
+    press.data.pointer_button.buttons = HUI_POINTER_BUTTON_PRIMARY;
+    ASSERT(hui_push_input(ctx, &press) == HUI_OK);
+
+    uint32_t dirty = hui_step(ctx, 0.016f);
+    ASSERT(dirty != 0);
+
+    const hui_input_state *state = hui_input_get_state(ctx);
+    ASSERT(!hui_node_is_null(state->focus));
+    ASSERT(state->focus.index == input.index && state->focus.gen == input.gen);
+
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    view = hui_get_draw_list(ctx);
+    placeholder_found = 0;
+    for (size_t i = 0; i < view.count; i++) {
+        const hui_draw *cmd = &view.items[i];
+        if (cmd->op != HUI_DRAW_OP_GLYPH_RUN) continue;
+        size_t len = 0;
+        const char *text = hui_draw_text_utf8(ctx, cmd, &len);
+        if (text && len == strlen("Name") && strncmp(text, "Name", len) == 0) {
+            placeholder_found = 1;
+            break;
+        }
+    }
+    ASSERT(!placeholder_found);
+
+    hui_input_event text_ev = {0};
+    text_ev.type = HUI_INPUT_EVENT_TEXT_INPUT;
+    text_ev.data.text.codepoint = 'H';
+    ASSERT(hui_push_input(ctx, &text_ev) == HUI_OK);
+    text_ev.data.text.codepoint = 'i';
+    ASSERT(hui_push_input(ctx, &text_ev) == HUI_OK);
+
+    dirty = hui_step(ctx, 0.016f);
+    ASSERT(dirty != 0);
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    view = hui_get_draw_list(ctx);
+    int hi_found = 0;
+    for (size_t i = 0; i < view.count; i++) {
+        const hui_draw *cmd = &view.items[i];
+        if (cmd->op != HUI_DRAW_OP_GLYPH_RUN) continue;
+        size_t len = 0;
+        const char *text = hui_draw_text_utf8(ctx, cmd, &len);
+        if (text && len == strlen("Hi") && strncmp(text, "Hi", len) == 0) {
+            hi_found = 1;
+        }
+    }
+    ASSERT(hi_found);
+
+    hui_input_event backspace = {0};
+    backspace.type = HUI_INPUT_EVENT_KEY_DOWN;
+    backspace.data.key.keycode = 8;
+    backspace.data.key.modifiers = 0;
+    ASSERT(hui_push_input(ctx, &backspace) == HUI_OK);
+
+    dirty = hui_step(ctx, 0.016f);
+    ASSERT(dirty != 0);
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    view = hui_get_draw_list(ctx);
+    int h_found = 0;
+    for (size_t i = 0; i < view.count; i++) {
+        const hui_draw *cmd = &view.items[i];
+        if (cmd->op != HUI_DRAW_OP_GLYPH_RUN) continue;
+        size_t len = 0;
+        const char *text = hui_draw_text_utf8(ctx, cmd, &len);
+        if (text && len == 1 && text[0] == 'H') {
+            h_found = 1;
+        }
+    }
+    ASSERT(h_found);
+
+    hui_destroy(ctx);
+}
+
 static void test_queries(void) {
     const char *html = "<header class='bar'><h1 id='title'>A</h1><p class='bar'>B</p></header>";
     hui_ctx *ctx = hui_create(NULL, NULL);
@@ -577,6 +724,7 @@ static const test_case tests[] = {
     {"input_hover_interaction", test_input_hover_interaction},
     {"font_size_application", test_font_size_application},
     {"text_field_interaction", test_text_field_interaction},
+    {"auto_text_input", test_auto_text_input},
     {"input_dirty_flags", test_input_dirty_flags},
     {"ctx_pipeline", test_ctx_pipeline}
 };

@@ -214,6 +214,16 @@ int hui_build_from_html(hui_builder *builder, const char *html, size_t html_len)
                     hui_dom_node *node = &builder->dom->nodes.data[idx];
                     node->tag = hui_intern_put(builder->atoms, probe.tag, probe.tag_len);
                     if (probe.id) node->id = hui_intern_put(builder->atoms, probe.id, probe.id_len);
+                    if (token.type_attr.n)
+                        node->attr_type = hui_intern_put(builder->atoms, token.type_attr.p, token.type_attr.n);
+                    if (token.placeholder_attr.n) {
+                        node->attr_placeholder = token.placeholder_attr.p;
+                        node->attr_placeholder_len = (uint32_t) token.placeholder_attr.n;
+                    }
+                    if (token.value_attr.n) {
+                        node->attr_value = token.value_attr.p;
+                        node->attr_value_len = (uint32_t) token.value_attr.n;
+                    }
                     if (probe.class_list) {
                         const char *p = probe.class_list;
                         size_t n = probe.class_list_len;
