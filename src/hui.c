@@ -49,6 +49,22 @@ typedef struct {
     uint32_t binding_index;
 } hui_auto_text_field;
 
+typedef struct {
+    size_t start;
+    size_t end;
+    hui_atom atom;
+} hui_bound_text_token;
+
+typedef struct {
+    uint32_t node_index;
+    char *template_str;
+    size_t template_len;
+    char *rendered;
+    size_t rendered_len;
+    size_t rendered_cap;
+    HUI_VEC(hui_bound_text_token) tokens;
+} hui_bound_text_template;
+
 static void hui_auto_text_fields_reset(hui_ctx *ctx);
 static int hui_auto_text_fields_rebuild(hui_ctx *ctx);
 static uint32_t hui_auto_text_fields_step(hui_ctx *ctx, float dt);
@@ -63,6 +79,10 @@ static hui_atom hui_binding_atom_from_mustache(hui_ctx *ctx, const char *text, s
 static hui_atom hui_binding_atom_from_attr(hui_ctx *ctx, const char *text, size_t len);
 static int hui_binding_push_from_string(hui_ctx *ctx, size_t entry_index, const char *text, int *string_applied);
 static hui_auto_text_field *hui_find_auto_field(hui_ctx *ctx, uint32_t dom_index);
+static void hui_bound_texts_reset(hui_ctx *ctx);
+static size_t hui_bound_text_prepare_node(hui_ctx *ctx, uint32_t node_index, hui_dom_node *node);
+static uint32_t hui_bound_text_apply_index(hui_ctx *ctx, uint32_t template_index);
+static const char *hui_binding_string_for_atom(const hui_ctx *ctx, hui_atom atom, size_t *len);
 static void hui_ctx_accumulate_dirty(hui_ctx *ctx, uint32_t flags);
 static hui_build_opts hui_normalize_build_opts(const hui_build_opts *opts);
 static int hui_render_opts_equal(const hui_ctx *ctx, const hui_build_opts *opts);
@@ -109,6 +129,7 @@ struct hui_ctx {
     hui_input_state input_state;
     HUI_VEC(hui_binding_entry) bindings;
     HUI_VEC(hui_auto_text_field) auto_text_fields;
+    HUI_VEC(hui_bound_text_template) bound_texts;
     struct {
         hui_clipboard_iface clipboard;
         int clipboard_set;
@@ -142,6 +163,172 @@ static void hui_ctx_accumulate_dirty(hui_ctx *ctx, uint32_t flags) {
     if (masked == 0) return;
     ctx->dirty_flags |= masked;
     ctx->draw_valid = 0;
+}
+
+static void hui_binding_push_node_unique(HUI_VEC(uint32_t) *vec, uint32_t node_index) {
+    if (!vec) return;
+    for (size_t i = 0; i < vec->len; i++) {
+        if (vec->data[i] == node_index) return;
+    }
+    hui_vec_push(vec, node_index);
+}
+
+static const char *hui_binding_string_for_atom(const hui_ctx *ctx, hui_atom atom, size_t *len) {
+    if (len) *len = 0;
+    if (!ctx || atom == 0) return "";
+    int entry_index = hui_binding_find_entry(ctx, atom);
+    if (entry_index < 0 || (size_t) entry_index >= ctx->bindings.len) return "";
+    const hui_binding_entry *entry = &ctx->bindings.data[entry_index];
+    if (!entry->string_value) return "";
+    if (len) *len = strlen(entry->string_value);
+    return entry->string_value;
+}
+
+static void hui_bound_texts_reset(hui_ctx *ctx) {
+    if (!ctx) return;
+    for (size_t i = 0; i < ctx->bound_texts.len; i++) {
+        hui_bound_text_template *templ = &ctx->bound_texts.data[i];
+        if (templ->template_str) ctx->free_fn(templ->template_str);
+        if (templ->rendered) ctx->free_fn(templ->rendered);
+        hui_vec_free(&templ->tokens);
+        templ->template_str = NULL;
+        templ->rendered = NULL;
+        templ->template_len = 0;
+        templ->rendered_len = 0;
+        templ->rendered_cap = 0;
+    }
+    ctx->bound_texts.len = 0;
+}
+
+static uint32_t hui_bound_text_apply_index(hui_ctx *ctx, uint32_t template_index) {
+    if (!ctx || template_index >= ctx->bound_texts.len) return 0;
+    hui_bound_text_template *templ = &ctx->bound_texts.data[template_index];
+    if (!templ->template_str) return 0;
+    if (templ->node_index >= ctx->dom.nodes.len) return 0;
+    const char *src = templ->template_str;
+    size_t cursor = 0;
+    size_t required = 0;
+    for (size_t i = 0; i < templ->tokens.len; i++) {
+        hui_bound_text_token *tok = &templ->tokens.data[i];
+        if (tok->start > cursor) required += tok->start - cursor;
+        size_t value_len = 0;
+        (void) hui_binding_string_for_atom(ctx, tok->atom, &value_len);
+        required += value_len;
+        cursor = tok->end;
+    }
+    required += templ->template_len - cursor;
+    if (templ->rendered_cap < required + 1) {
+        size_t new_cap = required + 1;
+        char *new_buf = (char *) ctx->alloc_fn(new_cap);
+        if (!new_buf) return 0;
+        if (templ->rendered) ctx->free_fn(templ->rendered);
+        templ->rendered = new_buf;
+        templ->rendered_cap = new_cap;
+    }
+    cursor = 0;
+    size_t out = 0;
+    for (size_t i = 0; i < templ->tokens.len; i++) {
+        hui_bound_text_token *tok = &templ->tokens.data[i];
+        if (tok->start > cursor) {
+            size_t lit_len = tok->start - cursor;
+            memcpy(templ->rendered + out, src + cursor, lit_len);
+            out += lit_len;
+        }
+        size_t value_len = 0;
+        const char *value = hui_binding_string_for_atom(ctx, tok->atom, &value_len);
+        if (value_len > 0) {
+            memcpy(templ->rendered + out, value, value_len);
+            out += value_len;
+        }
+        cursor = tok->end;
+    }
+    if (templ->template_len > cursor) {
+        size_t tail = templ->template_len - cursor;
+        memcpy(templ->rendered + out, src + cursor, tail);
+        out += tail;
+    }
+    templ->rendered[out] = '\0';
+    templ->rendered_len = out;
+    hui_dom_node *node = &ctx->dom.nodes.data[templ->node_index];
+    node->text = templ->rendered;
+    node->text_len = (uint32_t) out;
+    return HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT;
+}
+
+static size_t hui_bound_text_prepare_node(hui_ctx *ctx, uint32_t node_index, hui_dom_node *node) {
+    if (!ctx || !node || node->type != HUI_NODE_TEXT || !node->text) return 0;
+    const char *text = node->text;
+    size_t len = node->text_len;
+    if (len < 4) return 0;
+    HUI_VEC(hui_bound_text_token) tokens;
+    hui_vec_init(&tokens);
+    size_t pos = 0;
+    while (pos + 1 < len) {
+        if (text[pos] == '{' && pos + 1 < len && text[pos + 1] == '{') {
+            size_t close = pos + 2;
+            while (close + 1 < len && !(text[close] == '}' && text[close + 1] == '}')) close++;
+            if (close + 1 >= len) break;
+            size_t segment_len = (close + 2) - pos;
+            hui_atom atom = hui_binding_atom_from_mustache(ctx, text + pos, segment_len);
+            if (atom) {
+                hui_bound_text_token tok;
+                tok.start = pos;
+                tok.end = close + 2;
+                tok.atom = atom;
+                hui_vec_push(&tokens, tok);
+            }
+            pos = close + 2;
+        } else {
+            pos++;
+        }
+    }
+    if (tokens.len == 0) {
+        hui_vec_free(&tokens);
+        return 0;
+    }
+    size_t trimmed_start = 0;
+    size_t trimmed_end = len;
+    while (trimmed_start < trimmed_end && isspace((unsigned char) text[trimmed_start])) trimmed_start++;
+    while (trimmed_end > trimmed_start && isspace((unsigned char) text[trimmed_end - 1])) trimmed_end--;
+    if (tokens.len == 1) {
+        hui_bound_text_token tok = tokens.data[0];
+        if (tok.start == trimmed_start && tok.end == trimmed_end) {
+            node->binding_text_atom = tok.atom;
+            node->text = "";
+            node->text_len = 0;
+            hui_vec_free(&tokens);
+            return 1;
+        }
+    }
+
+    hui_bound_text_template templ;
+    memset(&templ, 0, sizeof(templ));
+    templ.node_index = node_index;
+    templ.template_len = len;
+    templ.template_str = (char *) ctx->alloc_fn(len + 1);
+    if (!templ.template_str) {
+        hui_vec_free(&tokens);
+        return tokens.len;
+    }
+    memcpy(templ.template_str, text, len);
+    templ.template_str[len] = '\0';
+    hui_vec_init(&templ.tokens);
+    for (size_t i = 0; i < tokens.len; i++) {
+        hui_vec_push(&templ.tokens, tokens.data[i]);
+    }
+    templ.rendered = NULL;
+    templ.rendered_len = 0;
+    templ.rendered_cap = 0;
+
+    uint32_t template_index = (uint32_t) ctx->bound_texts.len;
+    hui_vec_push(&ctx->bound_texts, templ);
+    node->binding_template_index = template_index;
+    node->text = "";
+    node->text_len = 0;
+    hui_vec_free(&tokens);
+
+    hui_bound_text_apply_index(ctx, template_index);
+    return ctx->bound_texts.data[template_index].tokens.len;
 }
 
 static hui_build_opts hui_normalize_build_opts(const hui_build_opts *opts) {
@@ -186,6 +373,7 @@ hui_ctx *hui_create(void * (*alloc_fn)(size_t), void (*free_fn)(void *)) {
     hui_draw_list_init(&ctx->draw);
     hui_vec_init(&ctx->bindings);
     hui_vec_init(&ctx->auto_text_fields);
+    hui_vec_init(&ctx->bound_texts);
     ctx->filter_spec.max_depth = -1;
     ctx->filter_spec.max_nodes = 0;
     ctx->filter_spec.flags = 0;
@@ -435,16 +623,25 @@ static int hui_binding_pull_pointer(hui_binding_entry *entry) {
 }
 
 static uint32_t hui_binding_apply_text_nodes(hui_ctx *ctx, hui_binding_entry *entry) {
-    if (!ctx || !entry || !entry->string_value) return 0;
+    if (!ctx || !entry) return 0;
     uint32_t dirty = 0;
-    uint32_t length = (uint32_t) hui_binding_string_length(entry);
+    uint32_t length = entry->string_value ? (uint32_t) hui_binding_string_length(entry) : 0;
     for (size_t i = 0; i < entry->text_nodes.len; i++) {
         uint32_t idx = entry->text_nodes.data[i];
         if (idx >= ctx->dom.nodes.len) continue;
         hui_dom_node *node = &ctx->dom.nodes.data[idx];
-        node->text = entry->string_value;
-        node->text_len = length;
-        dirty |= HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT;
+        if (node->binding_template_index != 0xFFFFFFFFu) {
+            dirty |= hui_bound_text_apply_index(ctx, node->binding_template_index);
+        } else {
+            if (entry->string_value) {
+                node->text = entry->string_value;
+                node->text_len = length;
+            } else {
+                node->text = "";
+                node->text_len = 0;
+            }
+            dirty |= HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT;
+        }
     }
     return dirty;
 }
@@ -512,11 +709,20 @@ static void hui_binding_relink_entry(hui_ctx *ctx, size_t entry_index) {
         hui_dom_node *node = &ctx->dom.nodes.data[i];
         if (node->binding_text_atom == entry->name) {
             node->binding_text_index = (uint32_t) entry_index;
-            hui_vec_push(&entry->text_nodes, (uint32_t) i);
+            hui_binding_push_node_unique(&entry->text_nodes, (uint32_t) i);
         }
         if (node->binding_value_atom == entry->name) {
             node->binding_value_index = (uint32_t) entry_index;
             hui_vec_push(&entry->input_nodes, (uint32_t) i);
+        }
+    }
+    for (size_t i = 0; i < ctx->bound_texts.len; i++) {
+        const hui_bound_text_template *templ = &ctx->bound_texts.data[i];
+        for (size_t t = 0; t < templ->tokens.len; t++) {
+            if (templ->tokens.data[t].atom == entry->name) {
+                hui_binding_push_node_unique(&entry->text_nodes, templ->node_index);
+                break;
+            }
         }
     }
 }
@@ -527,19 +733,16 @@ static void hui_binding_prepare_dom(hui_ctx *ctx) {
         ctx->bindings.data[i].text_nodes.len = 0;
         ctx->bindings.data[i].input_nodes.len = 0;
     }
+    hui_bound_texts_reset(ctx);
     for (size_t i = 0; i < ctx->dom.nodes.len; i++) {
         hui_dom_node *node = &ctx->dom.nodes.data[i];
         node->binding_text_index = 0xFFFFFFFFu;
         node->binding_value_index = 0xFFFFFFFFu;
         node->binding_text_atom = 0;
         node->binding_value_atom = 0;
+        node->binding_template_index = 0xFFFFFFFFu;
         if (node->type == HUI_NODE_TEXT) {
-            hui_atom atom = hui_binding_atom_from_mustache(ctx, node->text, node->text_len);
-            if (atom) {
-                node->binding_text_atom = atom;
-                node->text = "";
-                node->text_len = 0;
-            }
+            hui_bound_text_prepare_node(ctx, (uint32_t) i, node);
         } else if (node->type == HUI_NODE_ELEM) {
             if (node->attr_value && node->attr_value_len > 0) {
                 hui_atom atom = hui_binding_atom_from_attr(ctx, node->attr_value, node->attr_value_len);
@@ -661,6 +864,8 @@ void hui_destroy(hui_ctx *ctx) {
     hui_css_reset(&ctx->stylesheet);
     hui_style_store_reset(&ctx->styles);
     hui_draw_list_reset(&ctx->draw);
+    hui_bound_texts_reset(ctx);
+    hui_vec_free(&ctx->bound_texts);
     hui_vec_free(&ctx->input_events);
     hui_vec_free(&ctx->text_input);
     hui_vec_free(&ctx->key_pressed);
@@ -1137,7 +1342,11 @@ int hui_unbind_variable(hui_ctx *ctx, const char *name) {
     }
 
     ctx->bindings.len--;
-    hui_ctx_accumulate_dirty(ctx, HUI_DIRTY_STYLE | HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT);
+    uint32_t templ_dirty = 0;
+    for (size_t i = 0; i < ctx->bound_texts.len; i++) {
+        templ_dirty |= hui_bound_text_apply_index(ctx, (uint32_t) i);
+    }
+    hui_ctx_accumulate_dirty(ctx, templ_dirty | HUI_DIRTY_STYLE | HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT);
     return HUI_OK;
 }
 

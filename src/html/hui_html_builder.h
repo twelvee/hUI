@@ -42,6 +42,7 @@ typedef struct hui_dom_node {
     hui_atom binding_value_atom;
     uint32_t binding_text_index;
     uint32_t binding_value_index;
+    uint32_t binding_template_index;
 } hui_dom_node;
 
 typedef struct {

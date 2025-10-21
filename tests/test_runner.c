@@ -673,6 +673,74 @@ static void test_render_caching(void) {
     hui_destroy(ctx);
 }
 
+static void test_text_template_bindings(void) {
+    hui_ctx *ctx = hui_create(NULL, NULL);
+    ASSERT(ctx != NULL);
+
+    char name[32] = "Alice";
+    char email[64] = "alice@example.com";
+
+    hui_binding name_binding = {
+        .type = HUI_BIND_STRING,
+        .ptr = name,
+        .string_capacity = sizeof(name)
+    };
+    hui_binding email_binding = {
+        .type = HUI_BIND_STRING,
+        .ptr = email,
+        .string_capacity = sizeof(email)
+    };
+    ASSERT(hui_bind_variable(ctx, "name_value", &name_binding) == HUI_OK);
+    ASSERT(hui_bind_variable(ctx, "email_value", &email_binding) == HUI_OK);
+
+    const char *html = "<p id='msg'>Hi {{ name_value }}, contact us at {{ email_value }}.</p>";
+    const char *css = "p { color: #ffffff; }";
+    ASSERT(hui_feed_html(ctx, (hui_bytes){(const uint8_t *) html, strlen(html)}, 1) == HUI_OK);
+    ASSERT(hui_feed_css(ctx, (hui_bytes){(const uint8_t *) css, strlen(css)}, 1) == HUI_OK);
+    ASSERT(hui_parse(ctx) == HUI_OK);
+
+    hui_build_opts opts = {360.0f, 180.0f, 96.0f, 0};
+    hui_render_output out = {0};
+    ASSERT(hui_render(ctx, &opts, &out) == HUI_OK);
+
+    const char *expected = "Hi Alice, contact us at alice@example.com.";
+    int found = 0;
+    for (size_t i = 0; i < out.draw.count; i++) {
+        const hui_draw *cmd = &out.draw.items[i];
+        if (cmd->op != HUI_DRAW_OP_GLYPH_RUN) continue;
+        size_t len = 0;
+        const char *text = hui_draw_text_utf8(ctx, cmd, &len);
+        if (text && len == strlen(expected) && strncmp(text, expected, len) == 0) {
+            found = 1;
+            break;
+        }
+    }
+    ASSERT(found);
+
+    snprintf(name, sizeof(name), "%s", "Bob");
+    snprintf(email, sizeof(email), "%s", "bob@example.org");
+
+    uint32_t dirty = hui_step(ctx, 0.0f);
+    ASSERT(dirty != 0);
+    ASSERT(hui_render(ctx, &opts, &out) == HUI_OK);
+
+    expected = "Hi Bob, contact us at bob@example.org.";
+    found = 0;
+    for (size_t i = 0; i < out.draw.count; i++) {
+        const hui_draw *cmd = &out.draw.items[i];
+        if (cmd->op != HUI_DRAW_OP_GLYPH_RUN) continue;
+        size_t len = 0;
+        const char *text = hui_draw_text_utf8(ctx, cmd, &len);
+        if (text && len == strlen(expected) && strncmp(text, expected, len) == 0) {
+            found = 1;
+            break;
+        }
+    }
+    ASSERT(found);
+
+    hui_destroy(ctx);
+}
+
 static void test_text_binding_render(void) {
     hui_ctx *ctx = hui_create(NULL, NULL);
     ASSERT(ctx != NULL);
@@ -796,6 +864,7 @@ static const test_case tests[] = {
     {"input_hover_interaction", test_input_hover_interaction},
     {"font_size_application", test_font_size_application},
     {"text_field_interaction", test_text_field_interaction},
+    {"text_template_bindings", test_text_template_bindings},
     {"render_caching", test_render_caching},
     {"text_binding_render", test_text_binding_render},
     {"auto_text_input", test_auto_text_input},
