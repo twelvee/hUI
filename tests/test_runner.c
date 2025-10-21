@@ -179,7 +179,7 @@ static void test_ir_serialization(void) {
     hui_draw_list_init(&list);
     hui_draw draw;
     memset(&draw, 0, sizeof(draw));
-    draw.op = HUI_OP_RECT;
+    draw.op = HUI_DRAW_OP_RECT;
     draw.u0 = 0xFF0000FFu;
     hui_vec_push(&list.cmds, draw);
     const char *path = "test.huir";
@@ -189,6 +189,74 @@ static void test_ir_serialization(void) {
     fclose(f);
     remove(path);
     hui_draw_list_reset(&list);
+}
+
+static void test_button_text_color(void) {
+    const char *html =
+            "<!doctype html><html><body>"
+            "<main><button id='play'>Play</button><p>Body</p></main>"
+            "</body></html>";
+    const char *css =
+            "body { color: #A0A0A0; }"
+            "button { color: #FFFFFF; background-color: #202020; }";
+    hui_ctx *ctx = hui_create(NULL, NULL);
+    ASSERT(ctx != NULL);
+    ASSERT(hui_feed_html(ctx, (hui_bytes){(const uint8_t *) html, strlen(html)}, 1) == HUI_OK);
+    ASSERT(hui_feed_css(ctx, (hui_bytes){(const uint8_t *) css, strlen(css)}, 1) == HUI_OK);
+    ASSERT(hui_parse(ctx) == HUI_OK);
+    hui_build_opts opts = {640.0f, 480.0f, 96.0f, 0};
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+    hui_draw_list_view view = hui_get_draw_list(ctx);
+    int play_found = 0;
+    for (size_t i = 0; i < view.count; i++) {
+        const hui_draw *cmd = &view.items[i];
+        if (cmd->op != HUI_DRAW_OP_GLYPH_RUN) continue;
+        size_t len = 0;
+        const char *text = hui_draw_text_utf8(ctx, cmd, &len);
+        if (!text || len == 0) continue;
+        if (len == 4 && strncmp(text, "Play", 4) == 0) {
+            ASSERT(cmd->u0 == 0xFFFFFFFFu);
+            play_found = 1;
+        }
+    }
+    ASSERT(play_found);
+    hui_destroy(ctx);
+}
+
+static void test_font_size_application(void) {
+    const char *html =
+            "<!doctype html><html><body>"
+            "<main><button id='play'>Play</button><p class='muted'>Body</p></main>"
+            "</body></html>";
+    const char *css =
+            "body { font-size: 18px; }"
+            "button { font-size: 32px; }";
+    hui_ctx *ctx = hui_create(NULL, NULL);
+    ASSERT(ctx != NULL);
+    ASSERT(hui_feed_html(ctx, (hui_bytes){(const uint8_t *) html, strlen(html)}, 1) == HUI_OK);
+    ASSERT(hui_feed_css(ctx, (hui_bytes){(const uint8_t *) css, strlen(css)}, 1) == HUI_OK);
+    ASSERT(hui_parse(ctx) == HUI_OK);
+    hui_build_opts opts = {640.0f, 480.0f, 96.0f, 0};
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+    hui_draw_list_view view = hui_get_draw_list(ctx);
+    int play_found = 0;
+    int body_found = 0;
+    for (size_t i = 0; i < view.count; i++) {
+        const hui_draw *cmd = &view.items[i];
+        if (cmd->op != HUI_DRAW_OP_GLYPH_RUN) continue;
+        size_t len = 0;
+        const char *text = hui_draw_text_utf8(ctx, cmd, &len);
+        if (!text || len == 0) continue;
+        if (len == 4 && strncmp(text, "Play", 4) == 0) {
+            ASSERT(fabsf(cmd->f[4] - 32.0f) < 0.1f);
+            play_found = 1;
+        } else if (len == 4 && strncmp(text, "Body", 4) == 0) {
+            ASSERT(fabsf(cmd->f[4] - 18.0f) < 0.1f);
+            body_found = 1;
+        }
+    }
+    ASSERT(play_found && body_found);
+    hui_destroy(ctx);
 }
 
 static void test_ctx_pipeline(void) {
@@ -219,6 +287,8 @@ static const test_case tests[] = {
     {"dom_mutations", test_dom_mutations},
     {"queries", test_queries},
     {"ir_serialization", test_ir_serialization},
+    {"button_text_color", test_button_text_color},
+    {"font_size_application", test_font_size_application},
     {"ctx_pipeline", test_ctx_pipeline}
 };
 

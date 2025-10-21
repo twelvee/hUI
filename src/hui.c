@@ -205,6 +205,23 @@ int hui_dump_text_ir(hui_ctx *ctx, const char *path) {
     return hui_ir_dump_text_draw_only(&ctx->draw, path);
 }
 
+hui_draw_list_view hui_get_draw_list(hui_ctx *ctx) {
+    hui_draw_list_view view = {NULL, 0};
+    if (!ctx) return view;
+    view.items = ctx->draw.cmds.data;
+    view.count = ctx->draw.cmds.len;
+    return view;
+}
+
+const char *hui_draw_text_utf8(hui_ctx *ctx, const hui_draw *cmd, size_t *len) {
+    if (!ctx || !cmd || cmd->op != HUI_DRAW_OP_GLYPH_RUN) return NULL;
+    if (cmd->u1 >= ctx->dom.nodes.len) return NULL;
+    const hui_dom_node *node = &ctx->dom.nodes.data[cmd->u1];
+    if (node->type != HUI_NODE_TEXT) return NULL;
+    if (len) *len = node->text_len;
+    return node->text;
+}
+
 hui_node_handle hui_dom_root(hui_ctx *ctx) {
     if (ctx->dom.root == 0xFFFFFFFFu || ctx->dom.nodes.len == 0)
         return HUI_NODE_NULL;

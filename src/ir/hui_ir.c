@@ -32,10 +32,10 @@ int hui_ir_dump_text_draw_only(const hui_draw_list *list, const char *path) {
     fprintf(f, "HUIR dump (DRAW only), commands: %zu\n", list->cmds.len);
     for (size_t i = 0; i < list->cmds.len; i++) {
         const hui_draw *draw = &list->cmds.data[i];
-        if (draw->op == HUI_OP_RECT) {
+        if (draw->op == HUI_DRAW_OP_RECT) {
             fprintf(f, "%04zu: RECT  x=%.1f y=%.1f w=%.1f h=%.1f color=#%08X\n",
                     i, draw->f[0], draw->f[1], draw->f[2], draw->f[3], draw->u0);
-        } else if (draw->op == HUI_OP_GLYPH_RUN) {
+        } else if (draw->op == HUI_DRAW_OP_GLYPH_RUN) {
             fprintf(f, "%04zu: TEXT  x=%.1f y=%.1f w=%.1f h=%.1f color=#%08X\n",
                     i, draw->f[0], draw->f[1], draw->f[2], draw->f[3], draw->u0);
         } else {

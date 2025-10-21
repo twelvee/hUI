@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "hui_draw.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -111,6 +112,10 @@ hui_ir_view hui_get_ir(hui_ctx *ctx);
 int hui_write_ir_file(hui_ctx *ctx, const char *path);
 
 int hui_dump_text_ir(hui_ctx *ctx, const char *path);
+
+hui_draw_list_view hui_get_draw_list(hui_ctx *ctx);
+
+const char *hui_draw_text_utf8(hui_ctx *ctx, const hui_draw *cmd, size_t *len);
 
 hui_node_handle hui_dom_root(hui_ctx *ctx);
 

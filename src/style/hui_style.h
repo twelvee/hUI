@@ -22,6 +22,18 @@ typedef struct {
     HUI_VEC(hui_computed_style) styles;
 } hui_style_store;
 
+enum {
+    HUI_STYLE_PRESENT_DISPLAY = 1u << 0,
+    HUI_STYLE_PRESENT_WIDTH = 1u << 1,
+    HUI_STYLE_PRESENT_HEIGHT = 1u << 2,
+    HUI_STYLE_PRESENT_MARGIN = 1u << 3,
+    HUI_STYLE_PRESENT_PADDING = 1u << 4,
+    HUI_STYLE_PRESENT_BG_COLOR = 1u << 5,
+    HUI_STYLE_PRESENT_COLOR = 1u << 6,
+    HUI_STYLE_PRESENT_FONT_SIZE = 1u << 7,
+    HUI_STYLE_PRESENT_FONT_WEIGHT = 1u << 8
+};
+
 void hui_style_store_init(hui_style_store *store);
 
 void hui_style_store_reset(hui_style_store *store);

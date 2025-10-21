@@ -104,38 +104,63 @@ void hui_apply_styles(hui_style_store *store, hui_dom *dom, hui_intern *atoms, c
                 const hui_decl *decl = &rule->decls.data[di];
                 switch (decl->id) {
                     case HUI_DECL_DISPLAY: cs->display = decl->val.u32;
+                        cs->present_mask |= HUI_STYLE_PRESENT_DISPLAY;
                         break;
                     case HUI_DECL_WIDTH: cs->width = (decl->val.kind == HUI_VAL_PX) ? decl->val.num : -1.0f;
+                        cs->present_mask |= HUI_STYLE_PRESENT_WIDTH;
                         break;
                     case HUI_DECL_HEIGHT: cs->height = (decl->val.kind == HUI_VAL_PX) ? decl->val.num : -1.0f;
+                        cs->present_mask |= HUI_STYLE_PRESENT_HEIGHT;
                         break;
                     case HUI_DECL_MARGIN_TOP: cs->margin[0] = decl->val.num;
+                        cs->present_mask |= HUI_STYLE_PRESENT_MARGIN;
                         break;
                     case HUI_DECL_MARGIN_RIGHT: cs->margin[1] = decl->val.num;
+                        cs->present_mask |= HUI_STYLE_PRESENT_MARGIN;
                         break;
                     case HUI_DECL_MARGIN_BOTTOM: cs->margin[2] = decl->val.num;
+                        cs->present_mask |= HUI_STYLE_PRESENT_MARGIN;
                         break;
                     case HUI_DECL_MARGIN_LEFT: cs->margin[3] = decl->val.num;
+                        cs->present_mask |= HUI_STYLE_PRESENT_MARGIN;
                         break;
                     case HUI_DECL_PADDING_TOP: cs->padding[0] = decl->val.num;
+                        cs->present_mask |= HUI_STYLE_PRESENT_PADDING;
                         break;
                     case HUI_DECL_PADDING_RIGHT: cs->padding[1] = decl->val.num;
+                        cs->present_mask |= HUI_STYLE_PRESENT_PADDING;
                         break;
                     case HUI_DECL_PADDING_BOTTOM: cs->padding[2] = decl->val.num;
+                        cs->present_mask |= HUI_STYLE_PRESENT_PADDING;
                         break;
                     case HUI_DECL_PADDING_LEFT: cs->padding[3] = decl->val.num;
+                        cs->present_mask |= HUI_STYLE_PRESENT_PADDING;
                         break;
                     case HUI_DECL_BG_COLOR: cs->bg_color = decl->val.u32;
+                        cs->present_mask |= HUI_STYLE_PRESENT_BG_COLOR;
                         break;
                     case HUI_DECL_COLOR: cs->color = decl->val.u32;
+                        cs->present_mask |= HUI_STYLE_PRESENT_COLOR;
                         break;
                     case HUI_DECL_FONT_SIZE: cs->font_size = decl->val.num;
+                        cs->present_mask |= HUI_STYLE_PRESENT_FONT_SIZE;
                         break;
                     case HUI_DECL_FONT_WEIGHT: cs->font_weight = (uint32_t) decl->val.num;
+                        cs->present_mask |= HUI_STYLE_PRESENT_FONT_WEIGHT;
                         break;
                     default: break;
                 }
             }
         }
+    }
+
+    for (size_t i = 0; i < dom->nodes.len; i++) {
+        const hui_dom_node *node = &dom->nodes.data[i];
+        if (node->parent == 0xFFFFFFFFu) continue;
+        hui_computed_style *cs = &store->styles.data[i];
+        const hui_computed_style *parent = &store->styles.data[node->parent];
+        if (!(cs->present_mask & HUI_STYLE_PRESENT_COLOR)) cs->color = parent->color;
+        if (!(cs->present_mask & HUI_STYLE_PRESENT_FONT_SIZE)) cs->font_size = parent->font_size;
+        if (!(cs->present_mask & HUI_STYLE_PRESENT_FONT_WEIGHT)) cs->font_weight = parent->font_weight;
     }
 }

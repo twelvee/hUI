@@ -3,18 +3,7 @@
 
 #include <stdint.h>
 #include "../style/hui_style.h"
-
-typedef enum {
-    HUI_OP_RECT = 1,
-    HUI_OP_GLYPH_RUN = 2
-} hui_draw_op;
-
-typedef struct {
-    hui_draw_op op;
-    uint32_t u0;
-    uint32_t u1;
-    float f[6];
-} hui_draw;
+#include "hui/hui_draw.h"
 
 typedef struct {
     HUI_VEC(hui_draw) cmds;

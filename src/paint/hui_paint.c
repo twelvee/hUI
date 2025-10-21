@@ -20,8 +20,9 @@ void hui_paint_build(hui_draw_list *list, const hui_dom *dom, const hui_style_st
         if (node->type == HUI_NODE_ELEM && (cs->bg_color >> 24) != 0) {
             hui_draw draw;
             memset(&draw, 0, sizeof(draw));
-            draw.op = HUI_OP_RECT;
+            draw.op = HUI_DRAW_OP_RECT;
             draw.u0 = cs->bg_color;
+            draw.u1 = (uint32_t) i;
             draw.f[0] = node->x;
             draw.f[1] = node->y;
             draw.f[2] = node->w;
@@ -31,12 +32,14 @@ void hui_paint_build(hui_draw_list *list, const hui_dom *dom, const hui_style_st
         if (node->type == HUI_NODE_TEXT && node->text && node->text_len) {
             hui_draw draw;
             memset(&draw, 0, sizeof(draw));
-            draw.op = HUI_OP_GLYPH_RUN;
+            draw.op = HUI_DRAW_OP_GLYPH_RUN;
             draw.u0 = cs->color;
+            draw.u1 = (uint32_t) i;
             draw.f[0] = node->x;
             draw.f[1] = node->y;
             draw.f[2] = node->w;
             draw.f[3] = node->h;
+            draw.f[4] = cs->font_size;
             hui_vec_push(&list->cmds, draw);
         }
     }

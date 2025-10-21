@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.10)
 project(hUI C)
 
 set(CMAKE_C_STANDARD 11)
+option(HUI_BUILD_RAYLIB_EXAMPLE "Build the raylib integration example" ON)
 
 file(GLOB SRC
     src/*.c
@@ -18,6 +19,21 @@ target_include_directories(hui PUBLIC include src)
 
 add_executable(example examples/minimal.c)
 target_link_libraries(example hui)
+
+if (HUI_BUILD_RAYLIB_EXAMPLE)
+    include(FetchContent)
+    set(RAYLIB_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(RAYLIB_INSTALL OFF CACHE BOOL "" FORCE)
+    set(RAYLIB_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(
+        raylib
+        URL https://github.com/raysan5/raylib/archive/refs/tags/5.5.tar.gz
+    )
+    FetchContent_MakeAvailable(raylib)
+
+    add_executable(hui_raylib_example examples/raylib_example.c)
+    target_link_libraries(hui_raylib_example PRIVATE hui raylib)
+endif()
 
 enable_testing()
 add_executable(hui_tests tests/test_runner.c)
