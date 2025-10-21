@@ -82,6 +82,10 @@ typedef struct {
     uint32_t flags;
 } hui_build_opts;
 
+typedef struct {
+    float x, y, w, h;
+} hui_rect;
+
 typedef enum {
     HUI_INPUT_EVENT_NONE = 0,
     HUI_INPUT_EVENT_POINTER_MOVE,
@@ -160,6 +164,34 @@ int hui_write_ir_file(hui_ctx *ctx, const char *path);
 
 int hui_dump_text_ir(hui_ctx *ctx, const char *path);
 
+typedef struct {
+    const uint32_t *data;
+    size_t count;
+} hui_u32_view;
+
+typedef struct {
+    float pointer_x;
+    float pointer_y;
+    uint32_t pointer_buttons;
+    uint32_t pointer_pressed;
+    uint32_t pointer_released;
+    int pointer_inside;
+    uint32_t key_modifiers;
+    hui_node_handle hovered;
+    hui_node_handle focus;
+    hui_u32_view text_input;
+    hui_u32_view keys_pressed;
+    hui_u32_view keys_released;
+} hui_input_state;
+
+const hui_input_state *hui_input_get_state(hui_ctx *ctx);
+
+int hui_input_set_focus(hui_ctx *ctx, hui_node_handle node);
+
+hui_node_handle hui_input_get_focus(hui_ctx *ctx);
+
+int hui_input_key_down(hui_ctx *ctx, uint32_t keycode);
+
 hui_draw_list_view hui_get_draw_list(hui_ctx *ctx);
 
 const char *hui_draw_text_utf8(hui_ctx *ctx, const hui_draw *cmd, size_t *len);
@@ -202,7 +234,66 @@ void hui_mark_dirty(hui_ctx *ctx, hui_node_handle h, uint32_t flags);
 
 int hui_restyle_and_relayout(hui_ctx *ctx, const hui_build_opts *opts);
 
+int hui_node_get_layout(hui_ctx *ctx, hui_node_handle h, hui_rect *out);
+
 const char *hui_last_error(hui_ctx *ctx);
+
+typedef struct {
+    const char *(*get_text)(void *user);
+    void (*set_text)(void *user, const char *text_utf8);
+    void *user;
+} hui_clipboard_iface;
+
+typedef struct {
+    uint32_t backspace;
+    uint32_t select_all;
+    uint32_t copy;
+    uint32_t paste;
+} hui_text_field_keymap;
+
+typedef struct {
+    const char *container_id;
+    hui_node_handle container;
+    const char *value_id;
+    hui_node_handle value;
+    const char *placeholder;
+    const char *initial_text;
+    char *buffer;
+    size_t buffer_capacity;
+    const hui_clipboard_iface *clipboard;
+    const hui_text_field_keymap *keymap;
+    float backspace_initial_delay;
+    float backspace_repeat_delay;
+    uint32_t flags;
+} hui_text_field_desc;
+
+typedef struct {
+    hui_node_handle container;
+    hui_node_handle value;
+    hui_node_handle text;
+    char *buffer;
+    size_t capacity;
+    size_t length;
+    const char *placeholder;
+    int placeholder_visible;
+    int focused;
+    int select_all;
+    float backspace_timer;
+    float backspace_initial_delay;
+    float backspace_repeat_delay;
+    hui_clipboard_iface clipboard;
+    hui_text_field_keymap keymap;
+} hui_text_field;
+
+int hui_text_field_init(hui_ctx *ctx, hui_text_field *field, const hui_text_field_desc *desc);
+
+uint32_t hui_text_field_step(hui_ctx *ctx, hui_text_field *field, float dt);
+
+const char *hui_text_field_text(const hui_text_field *field);
+
+size_t hui_text_field_length(const hui_text_field *field);
+
+uint32_t hui_text_field_set_text(hui_ctx *ctx, hui_text_field *field, const char *text_utf8);
 
 #ifdef __cplusplus
 }

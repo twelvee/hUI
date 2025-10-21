@@ -16,6 +16,24 @@
 
 #define ASSERT(cond) do { if (!(cond)) { fprintf(stderr, "[FAIL] %s:%d: %s\n", __FILE__, __LINE__, #cond); current_failed = 1; } } while (0)
 
+typedef struct {
+    char buffer[128];
+} test_clipboard;
+
+static const char *test_clipboard_get(void *user) {
+    test_clipboard *clip = (test_clipboard *) user;
+    return clip->buffer;
+}
+
+static void test_clipboard_set(void *user, const char *text) {
+    test_clipboard *clip = (test_clipboard *) user;
+    if (!text) text = "";
+    size_t len = strlen(text);
+    if (len >= sizeof(clip->buffer)) len = sizeof(clip->buffer) - 1;
+    memcpy(clip->buffer, text, len);
+    clip->buffer[len] = '\0';
+}
+
 typedef void (*test_fn)(void);
 
 typedef struct {
@@ -329,6 +347,168 @@ static void test_font_size_application(void) {
     hui_destroy(ctx);
 }
 
+static void test_text_field_interaction(void) {
+    const char *html = "<!doctype html><html><body>"
+                       "<div id='name-input' class='input'><span id='name-value'></span></div>"
+                       "</body></html>";
+    const char *css = ".input { padding: 4px; border: 1px solid #202020; }";
+
+    hui_ctx *ctx = hui_create(NULL, NULL);
+    ASSERT(ctx != NULL);
+    ASSERT(hui_feed_html(ctx, (hui_bytes){(const uint8_t *) html, strlen(html)}, 1) == HUI_OK);
+    ASSERT(hui_feed_css(ctx, (hui_bytes){(const uint8_t *) css, strlen(css)}, 1) == HUI_OK);
+    ASSERT(hui_parse(ctx) == HUI_OK);
+
+    hui_build_opts opts = {200.0f, 120.0f, 96.0f, 0};
+    char buffer[64] = {0};
+    test_clipboard clip;
+    memset(&clip, 0, sizeof(clip));
+
+    hui_text_field_keymap keymap = {
+        .backspace = 8,
+        .select_all = 'A',
+        .copy = 'C',
+        .paste = 'V'
+    };
+    hui_clipboard_iface clipboard = {
+        .get_text = test_clipboard_get,
+        .set_text = test_clipboard_set,
+        .user = &clip
+    };
+    hui_text_field field;
+    hui_text_field_desc desc = {
+        .container_id = "name-input",
+        .value_id = "name-value",
+        .placeholder = "Placeholder",
+        .buffer = buffer,
+        .buffer_capacity = sizeof(buffer),
+        .clipboard = &clipboard,
+        .keymap = &keymap
+    };
+    hui_node_handle test_container = hui_dom_query_id(ctx, "name-input");
+    ASSERT(!hui_node_is_null(test_container));
+    ASSERT(hui_node_is_element(ctx, test_container));
+    hui_node_handle test_value = hui_dom_query_id(ctx, "name-value");
+    ASSERT(!hui_node_is_null(test_value));
+    ASSERT(hui_node_is_element(ctx, test_value));
+    int init_res = hui_text_field_init(ctx, &field, &desc);
+    ASSERT(init_res == HUI_OK);
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    hui_draw_list_view view = hui_get_draw_list(ctx);
+    int placeholder_found = 0;
+    for (size_t i = 0; i < view.count; i++) {
+        const hui_draw *cmd = &view.items[i];
+        if (cmd->op != HUI_DRAW_OP_GLYPH_RUN) continue;
+        size_t len = 0;
+        const char *text = hui_draw_text_utf8(ctx, cmd, &len);
+        if (text && len == strlen("Placeholder") && strncmp(text, "Placeholder", len) == 0)
+            placeholder_found = 1;
+    }
+    ASSERT(placeholder_found);
+
+    hui_node_handle container = hui_dom_query_id(ctx, "name-input");
+    ASSERT(!hui_node_is_null(container));
+    hui_rect rect;
+    ASSERT(hui_node_get_layout(ctx, container, &rect) == HUI_OK);
+    float px = rect.x + rect.w * 0.5f;
+    float py = rect.y + rect.h * 0.5f;
+
+    hui_input_event move = {0};
+    move.type = HUI_INPUT_EVENT_POINTER_MOVE;
+    move.data.pointer_move.x = px;
+    move.data.pointer_move.y = py;
+    ASSERT(hui_push_input(ctx, &move) == HUI_OK);
+
+    hui_input_event down = {0};
+    down.type = HUI_INPUT_EVENT_POINTER_BUTTON;
+    down.data.pointer_button.x = px;
+    down.data.pointer_button.y = py;
+    down.data.pointer_button.buttons = HUI_POINTER_BUTTON_PRIMARY;
+    ASSERT(hui_push_input(ctx, &down) == HUI_OK);
+
+    uint32_t dirty = hui_process_input(ctx);
+    dirty |= hui_text_field_step(ctx, &field, 0.016f);
+    ASSERT(dirty != 0);
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    view = hui_get_draw_list(ctx);
+    placeholder_found = 0;
+    for (size_t i = 0; i < view.count; i++) {
+        const hui_draw *cmd = &view.items[i];
+        if (cmd->op != HUI_DRAW_OP_GLYPH_RUN) continue;
+        size_t len = 0;
+        const char *text = hui_draw_text_utf8(ctx, cmd, &len);
+        if (text && len == strlen("Placeholder") && strncmp(text, "Placeholder", len) == 0)
+            placeholder_found = 1;
+    }
+    ASSERT(!placeholder_found);
+
+    hui_input_event text_ev = {0};
+    text_ev.type = HUI_INPUT_EVENT_TEXT_INPUT;
+    text_ev.data.text.codepoint = 'H';
+    ASSERT(hui_push_input(ctx, &text_ev) == HUI_OK);
+    text_ev.data.text.codepoint = 'i';
+    ASSERT(hui_push_input(ctx, &text_ev) == HUI_OK);
+
+    dirty = hui_process_input(ctx);
+    dirty |= hui_text_field_step(ctx, &field, 0.016f);
+    ASSERT(strcmp(hui_text_field_text(&field), "Hi") == 0);
+    ASSERT(hui_text_field_length(&field) == 2);
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    hui_input_event key_ev = {0};
+    key_ev.type = HUI_INPUT_EVENT_KEY_DOWN;
+    key_ev.data.key.keycode = 'A';
+    key_ev.data.key.modifiers = HUI_KEY_MOD_CTRL;
+    ASSERT(hui_push_input(ctx, &key_ev) == HUI_OK);
+    dirty = hui_process_input(ctx);
+    dirty |= hui_text_field_step(ctx, &field, 0.016f);
+    ASSERT(field.select_all);
+
+    key_ev.data.key.keycode = 'C';
+    ASSERT(hui_push_input(ctx, &key_ev) == HUI_OK);
+    dirty = hui_process_input(ctx);
+    dirty |= hui_text_field_step(ctx, &field, 0.016f);
+    ASSERT(strcmp(clip.buffer, "Hi") == 0);
+
+    memset(clip.buffer, 0, sizeof(clip.buffer));
+    memcpy(clip.buffer, "HELLO", 5);
+    key_ev.data.key.keycode = 'V';
+    ASSERT(hui_push_input(ctx, &key_ev) == HUI_OK);
+    dirty = hui_process_input(ctx);
+    dirty |= hui_text_field_step(ctx, &field, 0.016f);
+    ASSERT(strcmp(hui_text_field_text(&field), "HELLO") == 0);
+
+    hui_input_event backspace_down = {0};
+    backspace_down.type = HUI_INPUT_EVENT_KEY_DOWN;
+    backspace_down.data.key.keycode = 8;
+    backspace_down.data.key.modifiers = 0;
+    ASSERT(hui_push_input(ctx, &backspace_down) == HUI_OK);
+    dirty = hui_process_input(ctx);
+    dirty |= hui_text_field_step(ctx, &field, 0.016f);
+    ASSERT(strcmp(hui_text_field_text(&field), "HELL") == 0);
+
+    dirty = hui_process_input(ctx);
+    dirty |= hui_text_field_step(ctx, &field, field.backspace_initial_delay + 0.02f);
+    ASSERT(strcmp(hui_text_field_text(&field), "HEL") == 0);
+
+    dirty = hui_process_input(ctx);
+    dirty |= hui_text_field_step(ctx, &field, field.backspace_repeat_delay + 0.02f);
+    ASSERT(strcmp(hui_text_field_text(&field), "HE") == 0);
+
+    hui_input_event backspace_up = {0};
+    backspace_up.type = HUI_INPUT_EVENT_KEY_UP;
+    backspace_up.data.key.keycode = 8;
+    backspace_up.data.key.modifiers = 0;
+    ASSERT(hui_push_input(ctx, &backspace_up) == HUI_OK);
+    dirty = hui_process_input(ctx);
+    dirty |= hui_text_field_step(ctx, &field, 0.016f);
+    ASSERT(strcmp(hui_text_field_text(&field), "HE") == 0);
+
+    hui_destroy(ctx);
+}
+
 static void test_ctx_pipeline(void) {
     const char *html = "<header id='top' class='bar'><h1 id='title'>Text</h1></header>";
     const char *css = ".bar { background-color: #202020; color: #ffffff; padding: 8px; }";
@@ -360,6 +540,7 @@ static const test_case tests[] = {
     {"button_text_color", test_button_text_color},
     {"input_hover_interaction", test_input_hover_interaction},
     {"font_size_application", test_font_size_application},
+    {"text_field_interaction", test_text_field_interaction},
     {"ctx_pipeline", test_ctx_pipeline}
 };
 

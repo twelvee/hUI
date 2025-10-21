@@ -41,10 +41,19 @@ struct hui_ctx {
     float pointer_x;
     float pointer_y;
     uint32_t pointer_buttons;
+    uint32_t pointer_buttons_prev;
+    uint32_t pointer_pressed;
+    uint32_t pointer_released;
     uint32_t hovered_node;
     int pointer_active;
     uint32_t key_modifiers;
+    hui_node_handle focus_node;
     HUI_VEC(hui_input_event) input_events;
+    HUI_VEC(uint32_t) text_input;
+    HUI_VEC(uint32_t) key_pressed;
+    HUI_VEC(uint32_t) key_released;
+    HUI_VEC(uint32_t) key_held;
+    hui_input_state input_state;
     char last_error[256];
 };
 
@@ -71,12 +80,23 @@ hui_ctx *hui_create(void * (*alloc_fn)(size_t), void (*free_fn)(void *)) {
     ctx->filter_spec_enabled = 0;
     ctx->prop_mask = HUI_PROP_ALL;
     ctx->pointer_x = 0.0f;
-    ctx->pointer_y = 0.0f;
-    ctx->pointer_buttons = 0;
+   ctx->pointer_y = 0.0f;
+   ctx->pointer_buttons = 0;
+    ctx->pointer_buttons_prev = 0;
+    ctx->pointer_pressed = 0;
+    ctx->pointer_released = 0;
     ctx->hovered_node = 0xFFFFFFFFu;
     ctx->pointer_active = 0;
     ctx->key_modifiers = 0;
+    ctx->focus_node = HUI_NODE_NULL;
     hui_vec_init(&ctx->input_events);
+    hui_vec_init(&ctx->text_input);
+    hui_vec_init(&ctx->key_pressed);
+    hui_vec_init(&ctx->key_released);
+    hui_vec_init(&ctx->key_held);
+    memset(&ctx->input_state, 0, sizeof(ctx->input_state));
+    ctx->input_state.hovered = HUI_NODE_NULL;
+    ctx->input_state.focus = HUI_NODE_NULL;
     return ctx;
 }
 
@@ -90,6 +110,10 @@ void hui_destroy(hui_ctx *ctx) {
     hui_style_store_reset(&ctx->styles);
     hui_draw_list_reset(&ctx->draw);
     hui_vec_free(&ctx->input_events);
+    hui_vec_free(&ctx->text_input);
+    hui_vec_free(&ctx->key_pressed);
+    hui_vec_free(&ctx->key_released);
+    hui_vec_free(&ctx->key_held);
     ctx->free_fn(ctx);
 }
 
@@ -251,6 +275,26 @@ static uint32_t hui_apply_pointer_position(hui_ctx *ctx, float x, float y) {
     return hui_update_hover_target(ctx, hit);
 }
 
+static void hui_remove_key_held(hui_ctx *ctx, uint32_t keycode) {
+    for (size_t i = 0; i < ctx->key_held.len; i++) {
+        if (ctx->key_held.data[i] == keycode) {
+            if (i + 1 < ctx->key_held.len) {
+                memmove(&ctx->key_held.data[i], &ctx->key_held.data[i + 1],
+                        (ctx->key_held.len - i - 1) * sizeof(uint32_t));
+            }
+            ctx->key_held.len--;
+            return;
+        }
+    }
+}
+
+static int hui_key_is_held(const hui_ctx *ctx, uint32_t keycode) {
+    for (size_t i = 0; i < ctx->key_held.len; i++) {
+        if (ctx->key_held.data[i] == keycode) return 1;
+    }
+    return 0;
+}
+
 int hui_push_input(hui_ctx *ctx, const hui_input_event *event) {
     if (!ctx || !event) return HUI_EINVAL;
     hui_vec_push(&ctx->input_events, *event);
@@ -260,6 +304,11 @@ int hui_push_input(hui_ctx *ctx, const hui_input_event *event) {
 uint32_t hui_process_input(hui_ctx *ctx) {
     if (!ctx) return 0u;
     uint32_t dirty = 0u;
+    ctx->pointer_pressed = 0;
+    ctx->pointer_released = 0;
+    ctx->text_input.len = 0;
+    ctx->key_pressed.len = 0;
+    ctx->key_released.len = 0;
     for (size_t i = 0; i < ctx->input_events.len; i++) {
         const hui_input_event *ev = &ctx->input_events.data[i];
         switch (ev->type) {
@@ -267,27 +316,73 @@ uint32_t hui_process_input(hui_ctx *ctx) {
                 dirty |= hui_apply_pointer_position(ctx, ev->data.pointer_move.x, ev->data.pointer_move.y);
                 break;
             case HUI_INPUT_EVENT_POINTER_BUTTON:
+                ctx->pointer_buttons_prev = ctx->pointer_buttons;
                 ctx->pointer_buttons = ev->data.pointer_button.buttons;
+                ctx->pointer_pressed |= ctx->pointer_buttons & ~ctx->pointer_buttons_prev;
+                ctx->pointer_released |= ctx->pointer_buttons_prev & ~ctx->pointer_buttons;
                 dirty |= hui_apply_pointer_position(ctx, ev->data.pointer_button.x, ev->data.pointer_button.y);
                 break;
             case HUI_INPUT_EVENT_POINTER_LEAVE:
                 if (ctx->pointer_active || ctx->hovered_node != 0xFFFFFFFFu) {
                     ctx->pointer_active = 0;
                     ctx->pointer_buttons = 0;
+                    ctx->pointer_pressed = 0;
+                    ctx->pointer_released = 0;
                     dirty |= hui_update_hover_target(ctx, 0xFFFFFFFFu);
                 }
                 break;
             case HUI_INPUT_EVENT_KEY_DOWN:
+                ctx->key_modifiers = ev->data.key.modifiers;
+                if (!hui_key_is_held(ctx, ev->data.key.keycode)) {
+                    hui_vec_push(&ctx->key_held, ev->data.key.keycode);
+                }
+                hui_vec_push(&ctx->key_pressed, ev->data.key.keycode);
+                break;
             case HUI_INPUT_EVENT_KEY_UP:
                 ctx->key_modifiers = ev->data.key.modifiers;
+                hui_remove_key_held(ctx, ev->data.key.keycode);
+                hui_vec_push(&ctx->key_released, ev->data.key.keycode);
                 break;
             case HUI_INPUT_EVENT_TEXT_INPUT:
+                hui_vec_push(&ctx->text_input, ev->data.text.codepoint);
+                break;
             case HUI_INPUT_EVENT_NONE:
             default:
                 break;
         }
     }
     ctx->input_events.len = 0;
+    ctx->input_state.pointer_x = ctx->pointer_x;
+    ctx->input_state.pointer_y = ctx->pointer_y;
+    ctx->input_state.pointer_buttons = ctx->pointer_buttons;
+    ctx->input_state.pointer_pressed = ctx->pointer_pressed;
+    ctx->input_state.pointer_released = ctx->pointer_released;
+    ctx->input_state.pointer_inside = ctx->pointer_active;
+    ctx->input_state.key_modifiers = ctx->key_modifiers;
+    if (ctx->hovered_node != 0xFFFFFFFFu && ctx->hovered_node < ctx->dom.nodes.len) {
+        hui_dom_node *hover_node = &ctx->dom.nodes.data[ctx->hovered_node];
+        ctx->input_state.hovered = (hui_node_handle){ctx->hovered_node, hover_node->gen};
+    } else {
+        ctx->input_state.hovered = HUI_NODE_NULL;
+    }
+    if (!hui_node_is_null(ctx->focus_node) && ctx->focus_node.index < ctx->dom.nodes.len) {
+        hui_dom_node *focus_node = &ctx->dom.nodes.data[ctx->focus_node.index];
+        if (focus_node->gen == ctx->focus_node.gen) {
+            ctx->input_state.focus = ctx->focus_node;
+        } else {
+            ctx->focus_node = HUI_NODE_NULL;
+            ctx->input_state.focus = HUI_NODE_NULL;
+        }
+    } else {
+        ctx->focus_node = HUI_NODE_NULL;
+        ctx->input_state.focus = HUI_NODE_NULL;
+    }
+    ctx->input_state.text_input.data = ctx->text_input.data;
+    ctx->input_state.text_input.count = ctx->text_input.len;
+    ctx->input_state.keys_pressed.data = ctx->key_pressed.data;
+    ctx->input_state.keys_pressed.count = ctx->key_pressed.len;
+    ctx->input_state.keys_released.data = ctx->key_released.data;
+    ctx->input_state.keys_released.count = ctx->key_released.len;
     return dirty;
 }
 
@@ -532,5 +627,45 @@ int hui_restyle_and_relayout(hui_ctx *ctx, const hui_build_opts *opts) {
 }
 
 const char *hui_last_error(hui_ctx *ctx) {
+    if (!ctx) return NULL;
     return ctx->last_error;
+}
+
+const hui_input_state *hui_input_get_state(hui_ctx *ctx) {
+    if (!ctx) return NULL;
+    return &ctx->input_state;
+}
+
+int hui_input_set_focus(hui_ctx *ctx, hui_node_handle node) {
+    if (!ctx) return HUI_EINVAL;
+    if (!hui_node_is_null(node)) {
+        if (node.index >= ctx->dom.nodes.len) return HUI_EINVAL;
+        if (ctx->dom.nodes.data[node.index].gen != node.gen) return HUI_EINVAL;
+    }
+    ctx->focus_node = node;
+    ctx->input_state.focus = node;
+    return HUI_OK;
+}
+
+hui_node_handle hui_input_get_focus(hui_ctx *ctx) {
+    if (!ctx) return HUI_NODE_NULL;
+    return ctx->input_state.focus;
+}
+
+int hui_input_key_down(hui_ctx *ctx, uint32_t keycode) {
+    if (!ctx) return 0;
+    return hui_key_is_held(ctx, keycode);
+}
+
+int hui_node_get_layout(hui_ctx *ctx, hui_node_handle h, hui_rect *out) {
+    if (!ctx || !out) return HUI_EINVAL;
+    if (hui_node_is_null(h)) return HUI_EINVAL;
+    if (h.index >= ctx->dom.nodes.len) return HUI_EINVAL;
+    hui_dom_node *node = &ctx->dom.nodes.data[h.index];
+    if (node->gen != h.gen) return HUI_EINVAL;
+    out->x = node->x;
+    out->y = node->y;
+    out->w = node->w;
+    out->h = node->h;
+    return HUI_OK;
 }
