@@ -509,6 +509,42 @@ static void test_text_field_interaction(void) {
     hui_destroy(ctx);
 }
 
+static void test_input_dirty_flags(void) {
+    const char *html = "<button id='btn'>Click</button>";
+    const char *css = "button { background-color: #202020; color: #ffffff; padding: 8px; }";
+    hui_ctx *ctx = hui_create(NULL, NULL);
+    ASSERT(ctx != NULL);
+    ASSERT(hui_feed_html(ctx, (hui_bytes){(const uint8_t *) html, strlen(html)}, 1) == HUI_OK);
+    ASSERT(hui_feed_css(ctx, (hui_bytes){(const uint8_t *) css, strlen(css)}, 1) == HUI_OK);
+    ASSERT(hui_parse(ctx) == HUI_OK);
+    hui_build_opts opts = {320.0f, 180.0f, 96.0f, 0};
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    hui_draw_list_view initial_view = hui_get_draw_list(ctx);
+    ASSERT(initial_view.count > 0);
+
+    uint32_t dirty = hui_process_input(ctx);
+    ASSERT(dirty == 0);
+
+    hui_input_event move = {0};
+    move.type = HUI_INPUT_EVENT_POINTER_MOVE;
+    move.data.pointer_move.x = 12.0f;
+    move.data.pointer_move.y = 12.0f;
+    ASSERT(hui_push_input(ctx, &move) == HUI_OK);
+
+    dirty = hui_process_input(ctx);
+    ASSERT(dirty != 0);
+
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+    hui_draw_list_view hovered_view = hui_get_draw_list(ctx);
+    ASSERT(hovered_view.count == initial_view.count);
+
+    dirty = hui_process_input(ctx);
+    ASSERT(dirty == 0);
+
+    hui_destroy(ctx);
+}
+
 static void test_ctx_pipeline(void) {
     const char *html = "<header id='top' class='bar'><h1 id='title'>Text</h1></header>";
     const char *css = ".bar { background-color: #202020; color: #ffffff; padding: 8px; }";
@@ -541,6 +577,7 @@ static const test_case tests[] = {
     {"input_hover_interaction", test_input_hover_interaction},
     {"font_size_application", test_font_size_application},
     {"text_field_interaction", test_text_field_interaction},
+    {"input_dirty_flags", test_input_dirty_flags},
     {"ctx_pipeline", test_ctx_pipeline}
 };
 

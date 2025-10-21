@@ -56,6 +56,7 @@ set(HUI_TEST_CASES
     input_hover_interaction
     font_size_application
     text_field_interaction
+    input_dirty_flags
     ctx_pipeline
 )
 foreach(test_name IN LISTS HUI_TEST_CASES)

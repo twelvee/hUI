@@ -73,6 +73,21 @@ static void raylib_clipboard_set(void *user, const char *text_utf8) {
     SetClipboardText(text_utf8 ? text_utf8 : "");
 }
 
+static void render_hui_draw_list(hui_ctx *ctx, hui_draw_list_view draw_view) {
+    if (!ctx || !draw_view.items || draw_view.count == 0) return;
+    for (size_t i = 0; i < draw_view.count; i++) {
+        const hui_draw *cmd = &draw_view.items[i];
+        if (cmd->op == HUI_DRAW_OP_RECT) {
+            Color color = hui_color_from_argb(cmd->u0);
+            if (color.a == 0) continue;
+            DrawRectangleV((Vector2){cmd->f[0], cmd->f[1]}, (Vector2){cmd->f[2], cmd->f[3]}, color);
+        } else if (cmd->op == HUI_DRAW_OP_GLYPH_RUN) {
+            if (((cmd->u0 >> 24) & 0xFFu) == 0) continue;
+            draw_text_utf8(ctx, cmd);
+        }
+    }
+}
+
 int main(void) {
     SetConfigFlags(FLAG_WINDOW_RESIZABLE);
     InitWindow(800, 600, "hUI + raylib");
@@ -201,13 +216,19 @@ int main(void) {
         TraceLog(LOG_WARNING, "Failed to initialise email input field");
     }
 
-    hui_build_opts opts = {800.0f, 600.0f, 96.0f, 0};
+    hui_build_opts opts = {(float) GetRenderWidth(), (float) GetRenderHeight(), 96.0f, 0};
     if (hui_build_ir(ctx, &opts) != HUI_OK) {
         TraceLog(LOG_ERROR, "Initial build failed: %s", hui_last_error(ctx));
         hui_destroy(ctx);
         CloseWindow();
         return 1;
     }
+
+    RenderTexture2D ui_layer = LoadRenderTexture((int) opts.viewport_w, (int) opts.viewport_h);
+    if (ui_layer.id == 0) {
+        TraceLog(LOG_WARNING, "Failed to create UI render texture, falling back to direct rendering");
+    }
+    int ui_layer_dirty = 1;
 
     Vector2 prev_mouse = {-1.0f, -1.0f};
     uint32_t prev_buttons = 0u;
@@ -216,9 +237,15 @@ int main(void) {
     while (!WindowShouldClose()) {
         uint32_t dirty = 0;
         if (IsWindowResized()) {
-            opts.viewport_w = (float) GetScreenWidth();
-            opts.viewport_h = (float) GetScreenHeight();
+            opts.viewport_w = (float) GetRenderWidth();
+            opts.viewport_h = (float) GetRenderHeight();
             dirty |= HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT;
+            if (ui_layer.id != 0) UnloadRenderTexture(ui_layer);
+            ui_layer = LoadRenderTexture((int) opts.viewport_w, (int) opts.viewport_h);
+            if (ui_layer.id == 0) {
+                TraceLog(LOG_WARNING, "Failed to recreate UI render texture after resize");
+            }
+            ui_layer_dirty = 1;
         }
 
         float frame_dt = GetFrameTime();
@@ -308,30 +335,39 @@ int main(void) {
         if (dirty) {
             if (hui_build_ir(ctx, &opts) != HUI_OK) {
                 TraceLog(LOG_WARNING, "Rebuild failed: %s", hui_last_error(ctx));
+            } else {
+                ui_layer_dirty = 1;
             }
         }
 
-        const hui_draw_list_view draw_view = hui_get_draw_list(ctx);
+        hui_draw_list_view draw_view = hui_get_draw_list(ctx);
+
+        if (ui_layer.id != 0 && ui_layer_dirty) {
+            BeginTextureMode(ui_layer);
+            ClearBackground((Color){0, 0, 0, 0});
+            render_hui_draw_list(ctx, draw_view);
+            EndTextureMode();
+            ui_layer_dirty = 0;
+        }
 
         BeginDrawing();
         ClearBackground((Color){30, 30, 30, 255});
 
-        for (size_t i = 0; i < draw_view.count; i++) {
-            const hui_draw *cmd = &draw_view.items[i];
-            if (cmd->op == HUI_DRAW_OP_RECT) {
-                Color color = hui_color_from_argb(cmd->u0);
-                if (color.a == 0) continue;
-                DrawRectangleV((Vector2){cmd->f[0], cmd->f[1]}, (Vector2){cmd->f[2], cmd->f[3]}, color);
-            } else if (cmd->op == HUI_DRAW_OP_GLYPH_RUN) {
-                if (((cmd->u0 >> 24) & 0xFFu) == 0) continue;
-                draw_text_utf8(ctx, cmd);
-            }
+        if (ui_layer.id != 0) {
+            Rectangle src = {0.0f, 0.0f, (float) ui_layer.texture.width, -(float) ui_layer.texture.height};
+            Rectangle dst = {0.0f, 0.0f, opts.viewport_w, opts.viewport_h};
+            DrawTexturePro(ui_layer.texture, src, dst, (Vector2){0.0f, 0.0f}, 0.0f, WHITE);
+        } else {
+            render_hui_draw_list(ctx, draw_view);
         }
 
         DrawFPS(10, 10);
         EndDrawing();
     }
 
+    if (ui_layer.id != 0) {
+        UnloadRenderTexture(ui_layer);
+    }
     hui_destroy(ctx);
     CloseWindow();
     return 0;
