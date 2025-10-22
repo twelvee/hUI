@@ -341,14 +341,17 @@ int main(void) {
         float frame_dt = GetFrameTime();
         hui_step(ctx, frame_dt);
 
-        hui_render_output next_out = {0};
-        if (hui_render(ctx, &opts, &next_out) != HUI_OK) {
-            TraceLog(LOG_WARNING, "Render failed: %s", hui_last_error(ctx));
-        } else {
-            if (ui_layer.id != 0 && (next_out.changed || texture_reset)) {
-                blit_ui_to_texture(ui_layer, ctx, next_out.draw);
+        int ctx_dirty = hui_has_dirty(ctx);
+        if (texture_reset || ctx_dirty) {
+            hui_render_output next_out = {0};
+            if (hui_render(ctx, &opts, &next_out) != HUI_OK) {
+                TraceLog(LOG_WARNING, "Render failed: %s", hui_last_error(ctx));
+            } else {
+                if (ui_layer.id != 0 && (next_out.changed || texture_reset)) {
+                    blit_ui_to_texture(ui_layer, ctx, next_out.draw);
+                }
+                render_out = next_out;
             }
-            render_out = next_out;
         }
 
         BeginDrawing();

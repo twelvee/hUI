@@ -36,6 +36,7 @@ typedef struct {
     } cached;
     size_t string_cap;
     char *string_value;
+    size_t cached_length;
     HUI_VEC(uint32_t) text_nodes;
     HUI_VEC(uint32_t) input_nodes;
 } hui_binding_entry;
@@ -587,12 +588,28 @@ static size_t hui_binding_string_length(const hui_binding_entry *entry) {
     return strlen(entry->string_value);
 }
 
-static void hui_binding_store_string(hui_binding_entry *entry, const char *value) {
+static size_t hui_strnlen(const char *text, size_t max_len) {
+    if (!text) return 0;
+    size_t len = 0;
+    while (len < max_len && text[len] != '\0') len++;
+    return len;
+}
+
+static void hui_binding_store_string_len(hui_binding_entry *entry, const char *value, size_t len) {
     if (!entry || !entry->string_value || entry->string_cap == 0) return;
+    size_t copy_len = len;
+    if (entry->string_cap > 0 && copy_len >= entry->string_cap) copy_len = entry->string_cap - 1;
+    if (copy_len > 0 && value) {
+        memcpy(entry->string_value, value, copy_len);
+    }
+    if (copy_len < entry->string_cap)
+        entry->string_value[copy_len] = '\0';
+    entry->cached_length = copy_len;
+}
+
+static void hui_binding_store_string(hui_binding_entry *entry, const char *value) {
     size_t len = value ? strlen(value) : 0;
-    if (entry->string_cap > 0 && len >= entry->string_cap) len = entry->string_cap - 1;
-    if (len > 0 && value) memcpy(entry->string_value, value, len);
-    entry->string_value[len] = '\0';
+    hui_binding_store_string_len(entry, value, len);
 }
 
 static hui_auto_text_field *hui_find_auto_field(hui_ctx *ctx, uint32_t dom_index) {
@@ -619,40 +636,36 @@ static int hui_binding_pull_pointer(hui_binding_entry *entry) {
         case HUI_BIND_INT:
             if (entry->target.i32) {
                 int32_t value = *entry->target.i32;
-                if (!entry->string_value || value != entry->cached.i32 ||
-                    strcmp(entry->string_value, "") == 0) {
+                if (value != entry->cached.i32 || entry->cached_length == 0) {
                     char buffer[64];
                     snprintf(buffer, sizeof(buffer), "%d", value);
-                    if (!entry->string_value || strcmp(entry->string_value, buffer) != 0) {
-                        hui_binding_store_string(entry, buffer);
-                        changed = 1;
-                    }
+                    hui_binding_store_string(entry, buffer);
                     entry->cached.i32 = value;
+                    changed = 1;
                 }
             }
             break;
         case HUI_BIND_FLOAT:
             if (entry->target.f32) {
                 float value = *entry->target.f32;
-                if (!entry->string_value || value != entry->cached.f32 ||
-                    strcmp(entry->string_value, "") == 0) {
+                if (value != entry->cached.f32 || entry->cached_length == 0) {
                     char buffer[64];
                     snprintf(buffer, sizeof(buffer), "%.6g", value);
-                    if (!entry->string_value || strcmp(entry->string_value, buffer) != 0) {
-                        hui_binding_store_string(entry, buffer);
-                        changed = 1;
-                    }
+                    hui_binding_store_string(entry, buffer);
                     entry->cached.f32 = value;
+                    changed = 1;
                 }
             }
             break;
         case HUI_BIND_STRING:
-            if (entry->target.str.ptr && entry->target.str.capacity > 0 && entry->string_value) {
-                size_t cap = entry->target.str.capacity;
-                size_t len = strnlen(entry->target.str.ptr, cap - 1);
-                int diff = strncmp(entry->target.str.ptr, entry->string_value, cap) != 0;
-                if (diff || (entry->string_cap > 0 && len >= entry->string_cap)) {
-                    hui_binding_store_string(entry, entry->target.str.ptr);
+            if (entry->target.str.ptr && entry->target.str.capacity > 0) {
+                size_t capacity = entry->target.str.capacity;
+                size_t len = hui_strnlen(entry->target.str.ptr, capacity > 0 ? capacity - 1 : 0);
+                if (!entry->string_value ||
+                    entry->cached_length != len ||
+                    (len > 0 && memcmp(entry->string_value, entry->target.str.ptr, len) != 0) ||
+                    (entry->string_value && entry->string_value[len] != '\0')) {
+                    hui_binding_store_string_len(entry, entry->target.str.ptr, len);
                     changed = 1;
                 }
             }
@@ -851,7 +864,7 @@ static int hui_binding_push_from_string(hui_ctx *ctx, size_t entry_index, const 
             memcpy(entry->target.str.ptr, source, len);
             entry->target.str.ptr[len] = '\0';
             int string_changed = (!entry->string_value || strcmp(entry->string_value, entry->target.str.ptr) != 0);
-            hui_binding_store_string(entry, entry->target.str.ptr);
+            hui_binding_store_string_len(entry, entry->target.str.ptr, len);
             if (string_applied) *string_applied = string_changed;
             return pointer_changed || string_changed;
         }
@@ -894,8 +907,17 @@ static uint32_t hui_binding_sync_ctx(hui_ctx *ctx) {
 static uint32_t hui_auto_text_fields_step(hui_ctx *ctx, float dt) {
     if (!ctx) return 0;
     uint32_t dirty = 0;
+    const hui_input_state *state = hui_input_get_state(ctx);
+    int pointer_event = 0;
+    if (state) {
+        pointer_event = (state->pointer_pressed | state->pointer_released) != 0;
+    }
     for (size_t i = 0; i < ctx->auto_text_fields.len; i++) {
-        dirty |= hui_text_field_step(ctx, &ctx->auto_text_fields.data[i].field, dt);
+        hui_text_field *field = &ctx->auto_text_fields.data[i].field;
+        int active = pointer_event ||
+                     field->focused || field->selecting || field->nav_active_key != 0;
+        if (!active) continue;
+        dirty |= hui_text_field_step(ctx, field, dt);
     }
     return dirty;
 }
@@ -1054,6 +1076,11 @@ int hui_paint(hui_ctx *ctx) {
     return HUI_OK;
 }
 
+int hui_has_dirty(hui_ctx *ctx) {
+    if (!ctx) return 0;
+    return (ctx->dirty_flags & HUI_DIRTY_ALL) != 0;
+}
+
 int hui_build_ir(hui_ctx *ctx, const hui_build_opts *opts) {
     return hui_render(ctx, opts, NULL);
 }
@@ -1069,6 +1096,15 @@ int hui_render(hui_ctx *ctx, const hui_build_opts *opts, hui_render_output *out)
     int needs_layout = opts_changed || !ctx->draw_valid || ((pending_dirty & HUI_DIRTY_LAYOUT) != 0) || needs_style;
     int needs_paint = opts_changed || !ctx->draw_valid || ((pending_dirty & HUI_DIRTY_PAINT) != 0) || needs_layout;
     int status = HUI_OK;
+
+    if (!needs_style && !needs_layout && !needs_paint) {
+        local_out.changed = 0;
+        local_out.dirty_flags = pending_dirty;
+        local_out.draw.items = ctx->draw.cmds.data;
+        local_out.draw.count = ctx->draw.cmds.len;
+        if (out) *out = local_out;
+        return status;
+    }
 
     if (needs_style) {
         status = hui_style(ctx);
@@ -1332,7 +1368,10 @@ int hui_bind_variable(hui_ctx *ctx, const char *name, const hui_binding *binding
             return HUI_EINVAL;
     }
 
-    if (entry->string_value) entry->string_value[0] = '\0';
+    if (entry->string_value) {
+        entry->string_value[0] = '\0';
+        entry->cached_length = 0;
+    }
     hui_binding_pull_pointer(entry);
     if (ctx->dom.nodes.len > 0) {
         hui_binding_relink_entry(ctx, (size_t) idx);

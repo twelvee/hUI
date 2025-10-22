@@ -718,19 +718,20 @@ uint32_t hui_text_field_step(hui_ctx *ctx, hui_text_field *field, float dt) {
 
     hui_node_handle focus_handle = hui_input_get_focus(ctx);
 
-    hui_rect rect = (hui_rect){0, 0, 0, 0};
-    int has_rect = (hui_node_get_layout(ctx, field->container, &rect) == HUI_OK);
-    int pointer_inside_rect = 0;
-    if (has_rect && state->pointer_inside) {
-        float px = state->pointer_x;
-        float py = state->pointer_y;
-        pointer_inside_rect = (px >= rect.x && px <= rect.x + rect.w &&
-                               py >= rect.y && py <= rect.y + rect.h);
-    }
-
     int primary_pressed = (state->pointer_pressed & HUI_POINTER_BUTTON_PRIMARY) != 0;
     int primary_down = (state->pointer_buttons & HUI_POINTER_BUTTON_PRIMARY) != 0;
     int primary_released = (state->pointer_released & HUI_POINTER_BUTTON_PRIMARY) != 0;
+
+    int pointer_inside_rect = 0;
+    if (state->pointer_inside && (primary_pressed || primary_down || field->selecting || field->focused)) {
+        hui_rect rect = (hui_rect){0, 0, 0, 0};
+        if (hui_node_get_layout(ctx, field->container, &rect) == HUI_OK) {
+            float px = state->pointer_x;
+            float py = state->pointer_y;
+            pointer_inside_rect = (px >= rect.x && px <= rect.x + rect.w &&
+                                   py >= rect.y && py <= rect.y + rect.h);
+        }
+    }
 
     if (primary_pressed) {
         if (pointer_inside_rect) {

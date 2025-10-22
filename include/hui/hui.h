@@ -164,6 +164,8 @@ int hui_build_ir(hui_ctx *ctx, const hui_build_opts *opts);
 
 int hui_render(hui_ctx *ctx, const hui_build_opts *opts, hui_render_output *out);
 
+int hui_has_dirty(hui_ctx *ctx);
+
 int hui_push_input(hui_ctx *ctx, const hui_input_event *event);
 
 uint32_t hui_process_input(hui_ctx *ctx);
