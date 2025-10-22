@@ -21,6 +21,13 @@ file(GLOB SRC
 add_library(hui STATIC ${SRC})
 target_include_directories(hui PUBLIC include src)
 
+if (NOT MSVC)
+    find_library(HUI_MATH_LIB m)
+    if (HUI_MATH_LIB)
+        target_link_libraries(hui PUBLIC ${HUI_MATH_LIB})
+    endif ()
+endif ()
+
 add_executable(example examples/minimal.c)
 target_link_libraries(example PRIVATE hui)
 
