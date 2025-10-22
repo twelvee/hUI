@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdbool.h>
+#include <math.h>
 
 #include "hui_err.h"
 #include "raylib.h"
@@ -34,8 +35,34 @@ static void draw_text_utf8(hui_ctx *ctx, const hui_draw *cmd) {
     buffer[text_len] = '\0';
 
     float font_size = cmd->f[4] > 0.0f ? cmd->f[4] : 16.0f;
-    DrawTextEx(GetFontDefault(), buffer, (Vector2){cmd->f[0], cmd->f[1]}, font_size, 0.0f,
-               hui_color_from_argb(cmd->u0));
+    float scroll_x = cmd->f[5];
+    int clip_scissor = (scroll_x >= 0.0f) && (cmd->f[2] > 0.0f) && (cmd->f[3] > 0.0f);
+    if (clip_scissor) {
+        int sx = (int) floorf(cmd->f[0]);
+        int sy = (int) floorf(cmd->f[1]);
+        int sw = (int) ceilf(cmd->f[2]);
+        int sh = (int) ceilf(cmd->f[3]);
+        if (sw > 0 && sh > 0) BeginScissorMode(sx, sy, sw, sh);
+        else clip_scissor = 0;
+    }
+    Font font = GetFontDefault();
+    float char_width = font_size * HUI_TEXT_APPROX_CHAR_ADVANCE;
+    if (char_width <= 0.0f) char_width = font_size;
+    float draw_x = cmd->f[0] - (scroll_x >= 0.0f ? scroll_x : 0.0f);
+    Vector2 pen = {draw_x, cmd->f[1]};
+    size_t idx = 0;
+    while (idx < text_len) {
+        int consumed = 0;
+        int codepoint = GetCodepoint(buffer + idx, &consumed);
+        if (consumed <= 0) {
+            consumed = 1;
+            codepoint = (unsigned char) buffer[idx];
+        }
+        DrawTextCodepoint(font, codepoint, pen, font_size, hui_color_from_argb(cmd->u0));
+        pen.x += char_width;
+        idx += (size_t) consumed;
+    }
+    if (clip_scissor) EndScissorMode();
 
     if (buffer != stack_buf) MemFree(buffer);
 }
@@ -149,7 +176,18 @@ static uint32_t read_modifiers(void) {
 }
 
 static void process_key_input(hui_ctx *ctx) {
-    static const int tracked_keys[] = {KEY_BACKSPACE, KEY_A, KEY_C, KEY_V};
+    static const int tracked_keys[] = {
+        KEY_BACKSPACE,
+        KEY_DELETE,
+        KEY_A,
+        KEY_C,
+        KEY_V,
+        KEY_X,
+        KEY_LEFT,
+        KEY_RIGHT,
+        KEY_HOME,
+        KEY_END
+    };
     for (size_t i = 0; i < sizeof(tracked_keys) / sizeof(tracked_keys[0]); i++) {
         int key = tracked_keys[i];
         if (IsKeyPressed(key)) {
@@ -228,7 +266,13 @@ int main(void) {
         .backspace = KEY_BACKSPACE,
         .select_all = KEY_A,
         .copy = KEY_C,
-        .paste = KEY_V
+        .paste = KEY_V,
+        .cut = KEY_X,
+        .move_left = KEY_LEFT,
+        .move_right = KEY_RIGHT,
+        .move_home = KEY_HOME,
+        .move_end = KEY_END,
+        .delete_forward = KEY_DELETE
     };
     hui_set_text_input_defaults(ctx, &clipboard, &keymap, 256);
     hui_set_text_input_repeat(ctx, 0.4f, 0.05f);

@@ -68,7 +68,7 @@ typedef struct {
 static void hui_auto_text_fields_reset(hui_ctx *ctx);
 static int hui_auto_text_fields_rebuild(hui_ctx *ctx);
 static uint32_t hui_auto_text_fields_step(hui_ctx *ctx, float dt);
-static int hui_node_is_text_input(hui_ctx *ctx, const hui_dom_node *node);
+static int hui_node_text_entry_info(hui_ctx *ctx, const hui_dom_node *node, int *out_multiline);
 static void hui_binding_prepare_dom(hui_ctx *ctx);
 static int hui_binding_find_entry(const hui_ctx *ctx, hui_atom name);
 static void hui_binding_relink_entry(hui_ctx *ctx, size_t entry_index);
@@ -434,18 +434,36 @@ static void hui_auto_text_fields_reset(hui_ctx *ctx) {
     ctx->auto_text_fields.len = 0;
 }
 
-static int hui_node_is_text_input(hui_ctx *ctx, const hui_dom_node *node) {
+static int hui_node_text_entry_info(hui_ctx *ctx, const hui_dom_node *node, int *out_multiline) {
     if (!ctx || !node) return 0;
     if (node->type != HUI_NODE_ELEM) return 0;
+
+    hui_atom textarea_atom = hui_intern_put(&ctx->atoms, "textarea", strlen("textarea"));
+    if (node->tag == textarea_atom) {
+        if (out_multiline) *out_multiline = 1;
+        return 1;
+    }
+
     hui_atom input_atom = hui_intern_put(&ctx->atoms, "input", strlen("input"));
     if (node->tag != input_atom) return 0;
+
+    if (out_multiline) *out_multiline = 0;
     if (node->attr_type == 0) return 1;
+
     hui_atom text_atom = hui_intern_put(&ctx->atoms, "text", strlen("text"));
     hui_atom email_atom = hui_intern_put(&ctx->atoms, "email", strlen("email"));
     hui_atom password_atom = hui_intern_put(&ctx->atoms, "password", strlen("password"));
+    hui_atom search_atom = hui_intern_put(&ctx->atoms, "search", strlen("search"));
+    hui_atom tel_atom = hui_intern_put(&ctx->atoms, "tel", strlen("tel"));
+    hui_atom url_atom = hui_intern_put(&ctx->atoms, "url", strlen("url"));
+    hui_atom number_atom = hui_intern_put(&ctx->atoms, "number", strlen("number"));
     return node->attr_type == text_atom ||
            node->attr_type == email_atom ||
-           node->attr_type == password_atom;
+           node->attr_type == password_atom ||
+           node->attr_type == search_atom ||
+           node->attr_type == tel_atom ||
+           node->attr_type == url_atom ||
+           node->attr_type == number_atom;
 }
 
 static int hui_auto_text_fields_rebuild(hui_ctx *ctx) {
@@ -458,7 +476,8 @@ static int hui_auto_text_fields_rebuild(hui_ctx *ctx) {
 
     for (size_t i = 0; i < ctx->dom.nodes.len; i++) {
         hui_dom_node *node = &ctx->dom.nodes.data[i];
-        if (!hui_node_is_text_input(ctx, node)) continue;
+        int multiline = 0;
+        if (!hui_node_text_entry_info(ctx, node, &multiline)) continue;
 
         uint32_t binding_index = node->binding_value_index;
         size_t buffer_capacity = capacity_default;
@@ -496,6 +515,7 @@ static int hui_auto_text_fields_rebuild(hui_ctx *ctx) {
         desc.placeholder = auto_field.placeholder;
         desc.buffer = auto_field.buffer;
         desc.buffer_capacity = auto_field.buffer_capacity;
+        desc.flags = multiline ? HUI_TEXT_FIELD_FLAG_MULTI_LINE : HUI_TEXT_FIELD_FLAG_NONE;
         if (ctx->text_input_defaults.clipboard_set)
             desc.clipboard = &ctx->text_input_defaults.clipboard;
         if (ctx->text_input_defaults.keymap_set)
@@ -532,6 +552,27 @@ static int hui_auto_text_fields_rebuild(hui_ctx *ctx) {
             initial_text[node->attr_value_len] = '\0';
             hui_text_field_set_text(ctx, &auto_field.field, initial_text);
             ctx->free_fn(initial_text);
+        } else {
+            hui_node_handle elem = (hui_node_handle){(uint32_t) i, node->gen};
+            hui_node_handle child = hui_node_first_child(ctx, elem);
+            while (!hui_node_is_null(child) && !hui_node_is_text(ctx, child))
+                child = hui_node_next_sibling(ctx, child);
+            if (!hui_node_is_null(child)) {
+                hui_dom_node *text_node = &ctx->dom.nodes.data[child.index];
+                if (text_node->text && text_node->text_len > 0) {
+                    char *initial_text = (char *) ctx->alloc_fn(text_node->text_len + 1);
+                    if (!initial_text) {
+                        if (auto_field.placeholder) ctx->free_fn(auto_field.placeholder);
+                        ctx->free_fn(auto_field.buffer);
+                        hui_auto_text_fields_reset(ctx);
+                        return HUI_ENOMEM;
+                    }
+                    memcpy(initial_text, text_node->text, text_node->text_len);
+                    initial_text[text_node->text_len] = '\0';
+                    hui_text_field_set_text(ctx, &auto_field.field, initial_text);
+                    ctx->free_fn(initial_text);
+                }
+            }
         }
 
         hui_vec_push(&ctx->auto_text_fields, auto_field);
@@ -741,6 +782,10 @@ static void hui_binding_prepare_dom(hui_ctx *ctx) {
         node->binding_text_atom = 0;
         node->binding_value_atom = 0;
         node->binding_template_index = 0xFFFFFFFFu;
+        node->tf_flags = HUI_NODE_TF_NONE;
+        node->tf_caret = 0;
+        node->tf_sel_start = 0;
+        node->tf_sel_end = 0;
         if (node->type == HUI_NODE_TEXT) {
             hui_bound_text_prepare_node(ctx, (uint32_t) i, node);
         } else if (node->type == HUI_NODE_ELEM) {
@@ -1617,6 +1662,21 @@ int hui_dom_append_child(hui_ctx *ctx, hui_node_handle parent, hui_node_handle c
     }
     hui_mark_dirty(ctx, parent, HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT);
     return HUI_OK;
+}
+
+void hui_dom_set_text_field_state(hui_ctx *ctx, hui_node_handle h, uint32_t flags,
+                                  uint32_t caret, uint32_t sel_start, uint32_t sel_end,
+                                  float scroll_x, float scroll_y) {
+    if (!ctx || hui_node_is_null(h)) return;
+    if (h.index >= ctx->dom.nodes.len) return;
+    hui_dom_node *node = &ctx->dom.nodes.data[h.index];
+    if (node->gen != h.gen) return;
+    node->tf_flags = flags;
+    node->tf_caret = caret;
+    node->tf_sel_start = sel_start;
+    node->tf_sel_end = sel_end;
+    node->tf_scroll_x = scroll_x;
+    node->tf_scroll_y = scroll_y;
 }
 
 void hui_mark_dirty(hui_ctx *ctx, hui_node_handle h, uint32_t flags) {

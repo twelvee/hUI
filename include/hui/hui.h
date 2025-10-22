@@ -13,6 +13,14 @@ extern "C" {
 #define HUI_VERSION_MINOR 1
 #define HUI_VERSION_PATCH 0
 
+#define HUI_TEXT_APPROX_CHAR_ADVANCE 0.5f
+#define HUI_TEXT_APPROX_LINE_HEIGHT 1.2f
+
+enum {
+    HUI_TEXT_FIELD_FLAG_NONE = 0,
+    HUI_TEXT_FIELD_FLAG_MULTI_LINE = 1u << 0
+};
+
 typedef struct hui_ctx hui_ctx;
 
 typedef struct {
@@ -234,6 +242,11 @@ hui_node_handle hui_dom_create_text(hui_ctx *ctx, const char *text_utf8);
 
 void hui_mark_dirty(hui_ctx *ctx, hui_node_handle h, uint32_t flags);
 
+void hui_dom_set_text_field_state(hui_ctx *ctx, hui_node_handle text_node,
+                                  uint32_t flags, uint32_t caret,
+                                  uint32_t sel_start, uint32_t sel_end,
+                                  float scroll_x, float scroll_y);
+
 int hui_restyle_and_relayout(hui_ctx *ctx, const hui_build_opts *opts);
 
 int hui_node_get_layout(hui_ctx *ctx, hui_node_handle h, hui_rect *out);
@@ -251,6 +264,12 @@ typedef struct {
     uint32_t select_all;
     uint32_t copy;
     uint32_t paste;
+    uint32_t cut;
+    uint32_t move_left;
+    uint32_t move_right;
+    uint32_t move_home;
+    uint32_t move_end;
+    uint32_t delete_forward;
 } hui_text_field_keymap;
 
 typedef struct {
@@ -280,9 +299,20 @@ typedef struct {
     int placeholder_visible;
     int focused;
     int select_all;
+    int caret_visible;
+    int selecting;
+    size_t caret;
+    size_t sel_anchor;
+    float caret_timer;
     float backspace_timer;
     float backspace_initial_delay;
     float backspace_repeat_delay;
+    uint32_t flags;
+    int multiline;
+    float scroll_x;
+    float scroll_y;
+    uint32_t nav_active_key;
+    float nav_timer;
     hui_clipboard_iface clipboard;
     hui_text_field_keymap keymap;
 } hui_text_field;

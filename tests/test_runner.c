@@ -16,6 +16,15 @@
 
 #define ASSERT(cond) do { if (!(cond)) { fprintf(stderr, "[FAIL] %s:%d: %s\n", __FILE__, __LINE__, #cond); current_failed = 1; } } while (0)
 
+enum {
+    TEST_KEY_LEFT = 1000,
+    TEST_KEY_RIGHT = 1001,
+    TEST_KEY_HOME = 1002,
+    TEST_KEY_END = 1003,
+    TEST_KEY_DELETE = 127,
+    TEST_KEY_CUT = 'X'
+};
+
 typedef struct {
     char buffer[128];
 } test_clipboard;
@@ -202,7 +211,13 @@ static void test_auto_text_input(void) {
         .backspace = 8,
         .select_all = 'A',
         .copy = 'C',
-        .paste = 'V'
+        .paste = 'V',
+        .cut = TEST_KEY_CUT,
+        .move_left = TEST_KEY_LEFT,
+        .move_right = TEST_KEY_RIGHT,
+        .move_home = TEST_KEY_HOME,
+        .move_end = TEST_KEY_END,
+        .delete_forward = TEST_KEY_DELETE
     };
     hui_set_text_input_defaults(ctx, &clipboard, &keymap, 64);
 
@@ -501,7 +516,13 @@ static void test_text_field_interaction(void) {
         .backspace = 8,
         .select_all = 'A',
         .copy = 'C',
-        .paste = 'V'
+        .paste = 'V',
+        .cut = TEST_KEY_CUT,
+        .move_left = TEST_KEY_LEFT,
+        .move_right = TEST_KEY_RIGHT,
+        .move_home = TEST_KEY_HOME,
+        .move_end = TEST_KEY_END,
+        .delete_forward = TEST_KEY_DELETE
     };
     hui_clipboard_iface clipboard = {
         .get_text = test_clipboard_get,
@@ -530,6 +551,22 @@ static void test_text_field_interaction(void) {
 
     hui_draw_list_view view = hui_get_draw_list(ctx);
     int placeholder_found = 0;
+    for (size_t i = 0; i < view.count; i++) {
+        const hui_draw *cmd = &view.items[i];
+        if (cmd->op != HUI_DRAW_OP_GLYPH_RUN) continue;
+        size_t len = 0;
+        const char *text = hui_draw_text_utf8(ctx, cmd, &len);
+        if (text && len == strlen("Placeholder") && strncmp(text, "Placeholder", len) == 0)
+            placeholder_found = 1;
+    }
+    ASSERT(placeholder_found);
+
+    uint32_t placeholder_dirty = hui_text_field_set_text(ctx, &field, "");
+    ASSERT(placeholder_dirty != 0);
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    view = hui_get_draw_list(ctx);
+    placeholder_found = 0;
     for (size_t i = 0; i < view.count; i++) {
         const hui_draw *cmd = &view.items[i];
         if (cmd->op != HUI_DRAW_OP_GLYPH_RUN) continue;
@@ -590,6 +627,63 @@ static void test_text_field_interaction(void) {
     ASSERT(hui_text_field_length(&field) == 2);
     ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
 
+    hui_input_event arrow = {0};
+    arrow.type = HUI_INPUT_EVENT_KEY_DOWN;
+    arrow.data.key.keycode = TEST_KEY_LEFT;
+    arrow.data.key.modifiers = 0;
+    ASSERT(hui_push_input(ctx, &arrow) == HUI_OK);
+    arrow.type = HUI_INPUT_EVENT_KEY_UP;
+    ASSERT(hui_push_input(ctx, &arrow) == HUI_OK);
+    dirty = hui_process_input(ctx);
+    dirty |= hui_text_field_step(ctx, &field, 0.016f);
+
+    text_ev.data.text.codepoint = 'a';
+    ASSERT(hui_push_input(ctx, &text_ev) == HUI_OK);
+    dirty = hui_process_input(ctx);
+    dirty |= hui_text_field_step(ctx, &field, 0.016f);
+    ASSERT(strcmp(hui_text_field_text(&field), "Hai") == 0);
+
+    arrow.type = HUI_INPUT_EVENT_KEY_DOWN;
+    arrow.data.key.keycode = TEST_KEY_LEFT;
+    arrow.data.key.modifiers = HUI_KEY_MOD_SHIFT;
+    ASSERT(hui_push_input(ctx, &arrow) == HUI_OK);
+    arrow.type = HUI_INPUT_EVENT_KEY_UP;
+    ASSERT(hui_push_input(ctx, &arrow) == HUI_OK);
+    dirty = hui_process_input(ctx);
+    dirty |= hui_text_field_step(ctx, &field, 0.016f);
+
+    hui_input_event del = {0};
+    del.type = HUI_INPUT_EVENT_KEY_DOWN;
+    del.data.key.keycode = TEST_KEY_DELETE;
+    del.data.key.modifiers = 0;
+    ASSERT(hui_push_input(ctx, &del) == HUI_OK);
+    del.type = HUI_INPUT_EVENT_KEY_UP;
+    ASSERT(hui_push_input(ctx, &del) == HUI_OK);
+    dirty = hui_process_input(ctx);
+    dirty |= hui_text_field_step(ctx, &field, 0.016f);
+    ASSERT(strcmp(hui_text_field_text(&field), "Hi") == 0);
+
+    hui_input_event home = {0};
+    home.type = HUI_INPUT_EVENT_KEY_DOWN;
+    home.data.key.keycode = TEST_KEY_HOME;
+    home.data.key.modifiers = 0;
+    ASSERT(hui_push_input(ctx, &home) == HUI_OK);
+    home.type = HUI_INPUT_EVENT_KEY_UP;
+    ASSERT(hui_push_input(ctx, &home) == HUI_OK);
+    dirty = hui_process_input(ctx);
+    dirty |= hui_text_field_step(ctx, &field, 0.016f);
+
+    hui_input_event end_key = {0};
+    end_key.type = HUI_INPUT_EVENT_KEY_DOWN;
+    end_key.data.key.keycode = TEST_KEY_END;
+    end_key.data.key.modifiers = 0;
+    ASSERT(hui_push_input(ctx, &end_key) == HUI_OK);
+    end_key.type = HUI_INPUT_EVENT_KEY_UP;
+    ASSERT(hui_push_input(ctx, &end_key) == HUI_OK);
+    dirty = hui_process_input(ctx);
+    dirty |= hui_text_field_step(ctx, &field, 0.016f);
+    ASSERT(strcmp(hui_text_field_text(&field), "Hi") == 0);
+
     hui_input_event key_ev = {0};
     key_ev.type = HUI_INPUT_EVENT_KEY_DOWN;
     key_ev.data.key.keycode = 'A';
@@ -638,6 +732,135 @@ static void test_text_field_interaction(void) {
     dirty = hui_process_input(ctx);
     dirty |= hui_text_field_step(ctx, &field, 0.016f);
     ASSERT(strcmp(hui_text_field_text(&field), "HE") == 0);
+
+    text_ev.type = HUI_INPUT_EVENT_TEXT_INPUT;
+    text_ev.data.text.codepoint = '\n';
+    ASSERT(hui_push_input(ctx, &text_ev) == HUI_OK);
+    dirty = hui_process_input(ctx);
+    dirty |= hui_text_field_step(ctx, &field, 0.016f);
+    ASSERT(strcmp(hui_text_field_text(&field), "HE") == 0);
+
+    hui_destroy(ctx);
+}
+
+static void test_textarea_multiline(void) {
+    const char *html = "<!doctype html><html><body>"
+                       "<div id='note-input' class='input'><span id='note-value'></span></div>"
+                       "</body></html>";
+    const char *css = ".input { padding: 4px; border: 1px solid #202020; }";
+
+    hui_ctx *ctx = hui_create(NULL, NULL);
+    ASSERT(ctx != NULL);
+    ASSERT(hui_feed_html(ctx, (hui_bytes){(const uint8_t *) html, strlen(html)}, 1) == HUI_OK);
+    ASSERT(hui_feed_css(ctx, (hui_bytes){(const uint8_t *) css, strlen(css)}, 1) == HUI_OK);
+    ASSERT(hui_parse(ctx) == HUI_OK);
+
+    hui_build_opts opts = {200.0f, 160.0f, 96.0f, 0};
+    char buffer[128] = {0};
+    test_clipboard clip;
+    memset(&clip, 0, sizeof(clip));
+
+    hui_text_field_keymap keymap = {
+        .backspace = 8,
+        .select_all = 'A',
+        .copy = 'C',
+        .paste = 'V',
+        .cut = TEST_KEY_CUT,
+        .move_left = TEST_KEY_LEFT,
+        .move_right = TEST_KEY_RIGHT,
+        .move_home = TEST_KEY_HOME,
+        .move_end = TEST_KEY_END,
+        .delete_forward = TEST_KEY_DELETE
+    };
+    hui_clipboard_iface clipboard = {
+        .get_text = test_clipboard_get,
+        .set_text = test_clipboard_set,
+        .user = &clip
+    };
+
+    hui_text_field field;
+    hui_text_field_desc desc = {
+        .container_id = "note-input",
+        .value_id = "note-value",
+        .placeholder = "Write something",
+        .buffer = buffer,
+        .buffer_capacity = sizeof(buffer),
+        .clipboard = &clipboard,
+        .keymap = &keymap,
+        .flags = HUI_TEXT_FIELD_FLAG_MULTI_LINE
+    };
+    ASSERT(hui_text_field_init(ctx, &field, &desc) == HUI_OK);
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    ASSERT(hui_text_field_set_text(ctx, &field, "Hello\r\nWorld") != 0);
+    ASSERT(strcmp(hui_text_field_text(&field), "Hello\nWorld") == 0);
+    ASSERT(hui_text_field_length(&field) == strlen("Hello\nWorld"));
+
+    ASSERT(hui_input_set_focus(ctx, field.container) == HUI_OK);
+
+    hui_input_event newline = {0};
+    newline.type = HUI_INPUT_EVENT_TEXT_INPUT;
+    newline.data.text.codepoint = '\n';
+    ASSERT(hui_push_input(ctx, &newline) == HUI_OK);
+    uint32_t dirty = hui_process_input(ctx);
+    dirty |= hui_text_field_step(ctx, &field, 0.016f);
+    ASSERT(strcmp(hui_text_field_text(&field), "Hello\nWorld\n") == 0);
+
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    hui_destroy(ctx);
+}
+
+static void test_text_field_scroll(void) {
+    const char *html = "<!doctype html><html><body>"
+                       "<div id='scroll-input' class='input'><span id='scroll-value'></span></div>"
+                       "</body></html>";
+    const char *css = ".input { width: 120px; padding: 4px; border: 1px solid #202020; }";
+
+    hui_ctx *ctx = hui_create(NULL, NULL);
+    ASSERT(ctx != NULL);
+    ASSERT(hui_feed_html(ctx, (hui_bytes){(const uint8_t *) html, strlen(html)}, 1) == HUI_OK);
+    ASSERT(hui_feed_css(ctx, (hui_bytes){(const uint8_t *) css, strlen(css)}, 1) == HUI_OK);
+    ASSERT(hui_parse(ctx) == HUI_OK);
+
+    hui_build_opts opts = {200.0f, 120.0f, 96.0f, 0};
+    char buffer[128] = {0};
+
+    hui_text_field field;
+    hui_text_field_desc desc = {
+        .container_id = "scroll-input",
+        .value_id = "scroll-value",
+        .placeholder = "Hint",
+        .buffer = buffer,
+        .buffer_capacity = sizeof(buffer)
+    };
+    ASSERT(hui_text_field_init(ctx, &field, &desc) == HUI_OK);
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    const char *long_text = "012345678901234567890123456789";
+    ASSERT(hui_text_field_set_text(ctx, &field, long_text) != 0);
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    ASSERT(field.scroll_x > 0.0f);
+
+    hui_draw_list_view view = hui_get_draw_list(ctx);
+    int glyph_found = 0;
+    for (size_t i = 0; i < view.count; i++) {
+        const hui_draw *cmd = &view.items[i];
+        if (cmd->op != HUI_DRAW_OP_GLYPH_RUN) continue;
+        size_t len = 0;
+        const char *cmd_text = hui_draw_text_utf8(ctx, cmd, &len);
+        if (!cmd_text) continue;
+        if (len == strlen(long_text) && strncmp(cmd_text, long_text, len) == 0) {
+            glyph_found = 1;
+            ASSERT(cmd->f[5] >= 0.0f);
+            float diff = cmd->f[5] - field.scroll_x;
+            if (diff < 0.0f) diff = -diff;
+            ASSERT(diff < 0.001f);
+            break;
+        }
+    }
+    ASSERT(glyph_found);
 
     hui_destroy(ctx);
 }
@@ -864,6 +1087,8 @@ static const test_case tests[] = {
     {"input_hover_interaction", test_input_hover_interaction},
     {"font_size_application", test_font_size_application},
     {"text_field_interaction", test_text_field_interaction},
+    {"text_field_scroll", test_text_field_scroll},
+    {"textarea_multiline", test_textarea_multiline},
     {"text_template_bindings", test_text_template_bindings},
     {"render_caching", test_render_caching},
     {"text_binding_render", test_text_binding_render},

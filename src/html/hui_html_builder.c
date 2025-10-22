@@ -58,6 +58,10 @@ uint32_t hui_dom_add_node(hui_dom *dom, hui_node_type type) {
     node.binding_text_index = 0xFFFFFFFFu;
     node.binding_value_index = 0xFFFFFFFFu;
     node.binding_template_index = 0xFFFFFFFFu;
+    node.tf_flags = HUI_NODE_TF_NONE;
+    node.tf_caret = 0;
+    node.tf_sel_start = 0;
+    node.tf_sel_end = 0;
     uint32_t index = (uint32_t) dom->nodes.len;
     hui_vec_push(&dom->nodes, node);
     return index;

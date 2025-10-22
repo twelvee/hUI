@@ -19,6 +19,15 @@ enum {
     HUI_NODE_FLAG_HOVER = 1u << 0
 };
 
+enum {
+    HUI_NODE_TF_NONE = 0,
+    HUI_NODE_TF_VALUE = 1u << 0,
+    HUI_NODE_TF_PLACEHOLDER = 1u << 1,
+    HUI_NODE_TF_FOCUSED = 1u << 2,
+    HUI_NODE_TF_CARET_VISIBLE = 1u << 3,
+    HUI_NODE_TF_HAS_SELECTION = 1u << 4
+};
+
 typedef struct hui_dom_node {
     uint32_t gen;
     uint32_t parent;
@@ -43,6 +52,12 @@ typedef struct hui_dom_node {
     uint32_t binding_text_index;
     uint32_t binding_value_index;
     uint32_t binding_template_index;
+    uint32_t tf_flags;
+    uint32_t tf_caret;
+    uint32_t tf_sel_start;
+    uint32_t tf_sel_end;
+    float tf_scroll_x;
+    float tf_scroll_y;
 } hui_dom_node;
 
 typedef struct {

@@ -56,6 +56,8 @@ set(HUI_TEST_CASES
     input_hover_interaction
     font_size_application
     text_field_interaction
+    text_field_scroll
+    textarea_multiline
     text_template_bindings
     render_caching
     text_binding_render
