@@ -469,11 +469,28 @@ static int hui_node_text_entry_info(hui_ctx *ctx, const hui_dom_node *node, int 
 
 static int hui_auto_text_fields_rebuild(hui_ctx *ctx) {
     if (!ctx) return HUI_EINVAL;
-    hui_auto_text_fields_reset(ctx);
-    if (ctx->dom.nodes.len == 0) return HUI_OK;
-
+    size_t old_len = ctx->auto_text_fields.len;
+    size_t reuse_index = 0;
     size_t capacity_default = ctx->text_input_defaults.buffer_capacity;
     if (capacity_default < 16) capacity_default = 256;
+
+    if (ctx->dom.nodes.len == 0) {
+        for (size_t i = 0; i < old_len; i++) {
+            hui_auto_text_field *field = &ctx->auto_text_fields.data[i];
+            if (field->buffer) {
+                ctx->free_fn(field->buffer);
+                field->buffer = NULL;
+            }
+            if (field->placeholder) {
+                ctx->free_fn(field->placeholder);
+                field->placeholder = NULL;
+            }
+        }
+        ctx->auto_text_fields.len = 0;
+        return HUI_OK;
+    }
+
+    int status = HUI_OK;
 
     for (size_t i = 0; i < ctx->dom.nodes.len; i++) {
         hui_dom_node *node = &ctx->dom.nodes.data[i];
@@ -481,41 +498,94 @@ static int hui_auto_text_fields_rebuild(hui_ctx *ctx) {
         if (!hui_node_text_entry_info(ctx, node, &multiline)) continue;
 
         uint32_t binding_index = node->binding_value_index;
-        size_t buffer_capacity = capacity_default;
+        const char *initial_text_src = NULL;
+        size_t initial_text_len = 0;
         if (binding_index != 0xFFFFFFFFu && binding_index < ctx->bindings.len) {
             hui_binding_entry *binding = &ctx->bindings.data[binding_index];
-            if (binding->type == HUI_BIND_STRING && binding->string_cap > buffer_capacity)
-                buffer_capacity = binding->string_cap;
+            if (binding->type == HUI_BIND_STRING && binding->string_value) {
+                initial_text_src = binding->string_value;
+                initial_text_len = binding->cached_length;
+            }
+        } else if (node->attr_value && node->attr_value_len > 0 && node->binding_value_atom == 0) {
+            initial_text_src = node->attr_value;
+            initial_text_len = node->attr_value_len;
+        } else {
+            hui_node_handle elem = (hui_node_handle){(uint32_t) i, node->gen};
+            hui_node_handle child = hui_node_first_child(ctx, elem);
+            while (!hui_node_is_null(child) && !hui_node_is_text(ctx, child))
+                child = hui_node_next_sibling(ctx, child);
+            if (!hui_node_is_null(child)) {
+                hui_dom_node *text_node = &ctx->dom.nodes.data[child.index];
+                if (text_node->text && text_node->text_len > 0) {
+                    initial_text_src = text_node->text;
+                    initial_text_len = text_node->text_len;
+                }
+            }
         }
 
-        hui_auto_text_field auto_field;
-        memset(&auto_field, 0, sizeof(auto_field));
-        auto_field.buffer_capacity = buffer_capacity;
-        auto_field.buffer = (char *) ctx->alloc_fn(auto_field.buffer_capacity);
-        if (!auto_field.buffer) {
-            hui_auto_text_fields_reset(ctx);
-            return HUI_ENOMEM;
+        size_t required_capacity = capacity_default;
+        if (initial_text_len + 1 > required_capacity)
+            required_capacity = initial_text_len + 1;
+        if (binding_index != 0xFFFFFFFFu && binding_index < ctx->bindings.len) {
+            hui_binding_entry *binding = &ctx->bindings.data[binding_index];
+            if (binding->type == HUI_BIND_STRING && binding->string_cap > required_capacity)
+                required_capacity = binding->string_cap;
         }
-        auto_field.buffer[0] = '\0';
+
+        hui_auto_text_field *auto_field = NULL;
+        if (reuse_index < old_len) {
+            auto_field = &ctx->auto_text_fields.data[reuse_index];
+        } else {
+            hui_auto_text_field fresh;
+            memset(&fresh, 0, sizeof(fresh));
+            fresh.dom_index = 0xFFFFFFFFu;
+            fresh.binding_index = 0xFFFFFFFFu;
+            hui_vec_push(&ctx->auto_text_fields, fresh);
+            auto_field = &ctx->auto_text_fields.data[reuse_index];
+        }
+        reuse_index++;
+
+        if (!auto_field->buffer || auto_field->buffer_capacity < required_capacity) {
+            char *new_buffer = (char *) ctx->alloc_fn(required_capacity);
+            if (!new_buffer) {
+                status = HUI_ENOMEM;
+                goto rebuild_fail;
+            }
+            if (auto_field->buffer) ctx->free_fn(auto_field->buffer);
+            auto_field->buffer = new_buffer;
+            auto_field->buffer_capacity = required_capacity;
+        }
+        auto_field->buffer[0] = '\0';
 
         if (node->attr_placeholder && node->attr_placeholder_len > 0) {
-            auto_field.placeholder = (char *) ctx->alloc_fn(node->attr_placeholder_len + 1);
-            if (!auto_field.placeholder) {
-                ctx->free_fn(auto_field.buffer);
-                hui_auto_text_fields_reset(ctx);
-                return HUI_ENOMEM;
+            size_t existing_len = auto_field->placeholder ? strlen(auto_field->placeholder) : 0;
+            if (existing_len != node->attr_placeholder_len ||
+                (existing_len > 0 && memcmp(auto_field->placeholder,
+                                            node->attr_placeholder,
+                                            existing_len) != 0)) {
+                char *new_placeholder = (char *) ctx->alloc_fn(node->attr_placeholder_len + 1);
+                if (!new_placeholder) {
+                    status = HUI_ENOMEM;
+                    goto rebuild_fail;
+                }
+                memcpy(new_placeholder, node->attr_placeholder, node->attr_placeholder_len);
+                new_placeholder[node->attr_placeholder_len] = '\0';
+                if (auto_field->placeholder) ctx->free_fn(auto_field->placeholder);
+                auto_field->placeholder = new_placeholder;
             }
-            memcpy(auto_field.placeholder, node->attr_placeholder, node->attr_placeholder_len);
-            auto_field.placeholder[node->attr_placeholder_len] = '\0';
+        } else if (auto_field->placeholder) {
+            ctx->free_fn(auto_field->placeholder);
+            auto_field->placeholder = NULL;
         }
 
+        memset(&auto_field->field, 0, sizeof(auto_field->field));
         hui_text_field_desc desc;
         memset(&desc, 0, sizeof(desc));
         desc.container = (hui_node_handle){(uint32_t) i, node->gen};
         desc.value = desc.container;
-        desc.placeholder = auto_field.placeholder;
-        desc.buffer = auto_field.buffer;
-        desc.buffer_capacity = auto_field.buffer_capacity;
+        desc.placeholder = auto_field->placeholder;
+        desc.buffer = auto_field->buffer;
+        desc.buffer_capacity = auto_field->buffer_capacity;
         desc.flags = multiline ? HUI_TEXT_FIELD_FLAG_MULTI_LINE : HUI_TEXT_FIELD_FLAG_NONE;
         if (ctx->text_input_defaults.clipboard_set)
             desc.clipboard = &ctx->text_input_defaults.clipboard;
@@ -526,61 +596,61 @@ static int hui_auto_text_fields_rebuild(hui_ctx *ctx) {
             desc.backspace_repeat_delay = ctx->text_input_defaults.backspace_repeat_delay;
         }
 
-        if (hui_text_field_init(ctx, &auto_field.field, &desc) != HUI_OK) {
-            ctx->free_fn(auto_field.buffer);
-            if (auto_field.placeholder) ctx->free_fn(auto_field.placeholder);
-            hui_auto_text_fields_reset(ctx);
-            return HUI_EINVAL;
+        if (hui_text_field_init(ctx, &auto_field->field, &desc) != HUI_OK) {
+            status = HUI_EINVAL;
+            goto rebuild_fail;
         }
 
-        auto_field.dom_index = (uint32_t) i;
-        auto_field.binding_index = binding_index;
+        auto_field->dom_index = (uint32_t) i;
+        auto_field->binding_index = binding_index;
 
         if (binding_index != 0xFFFFFFFFu && binding_index < ctx->bindings.len) {
             hui_binding_entry *entry = &ctx->bindings.data[binding_index];
-            if (entry->string_value) {
-                hui_text_field_set_text(ctx, &auto_field.field, entry->string_value);
-            }
-        } else if (node->attr_value && node->attr_value_len > 0 && node->binding_value_atom == 0) {
-            char *initial_text = (char *) ctx->alloc_fn(node->attr_value_len + 1);
-            if (!initial_text) {
-                if (auto_field.placeholder) ctx->free_fn(auto_field.placeholder);
-                ctx->free_fn(auto_field.buffer);
-                hui_auto_text_fields_reset(ctx);
-                return HUI_ENOMEM;
-            }
-            memcpy(initial_text, node->attr_value, node->attr_value_len);
-            initial_text[node->attr_value_len] = '\0';
-            hui_text_field_set_text(ctx, &auto_field.field, initial_text);
-            ctx->free_fn(initial_text);
-        } else {
-            hui_node_handle elem = (hui_node_handle){(uint32_t) i, node->gen};
-            hui_node_handle child = hui_node_first_child(ctx, elem);
-            while (!hui_node_is_null(child) && !hui_node_is_text(ctx, child))
-                child = hui_node_next_sibling(ctx, child);
-            if (!hui_node_is_null(child)) {
-                hui_dom_node *text_node = &ctx->dom.nodes.data[child.index];
-                if (text_node->text && text_node->text_len > 0) {
-                    char *initial_text = (char *) ctx->alloc_fn(text_node->text_len + 1);
-                    if (!initial_text) {
-                        if (auto_field.placeholder) ctx->free_fn(auto_field.placeholder);
-                        ctx->free_fn(auto_field.buffer);
-                        hui_auto_text_fields_reset(ctx);
-                        return HUI_ENOMEM;
-                    }
-                    memcpy(initial_text, text_node->text, text_node->text_len);
-                    initial_text[text_node->text_len] = '\0';
-                    hui_text_field_set_text(ctx, &auto_field.field, initial_text);
-                    ctx->free_fn(initial_text);
+            if (entry->string_value)
+                hui_text_field_set_text(ctx, &auto_field->field, entry->string_value);
+        } else if (initial_text_src && initial_text_len > 0) {
+            if (initial_text_len + 1 > auto_field->buffer_capacity) {
+                char *new_buffer = (char *) ctx->alloc_fn(initial_text_len + 1);
+                if (!new_buffer) {
+                    status = HUI_ENOMEM;
+                    goto rebuild_fail;
+                }
+                ctx->free_fn(auto_field->buffer);
+                auto_field->buffer = new_buffer;
+                auto_field->buffer_capacity = initial_text_len + 1;
+                desc.buffer = auto_field->buffer;
+                desc.buffer_capacity = auto_field->buffer_capacity;
+                memset(&auto_field->field, 0, sizeof(auto_field->field));
+                if (hui_text_field_init(ctx, &auto_field->field, &desc) != HUI_OK) {
+                    status = HUI_EINVAL;
+                    goto rebuild_fail;
                 }
             }
+            memcpy(auto_field->buffer, initial_text_src, initial_text_len);
+            auto_field->buffer[initial_text_len] = '\0';
+            hui_text_field_set_text(ctx, &auto_field->field, auto_field->buffer);
         }
-
-        hui_vec_push(&ctx->auto_text_fields, auto_field);
     }
+
+    for (size_t i = reuse_index; i < old_len; i++) {
+        hui_auto_text_field *field = &ctx->auto_text_fields.data[i];
+        if (field->buffer) {
+            ctx->free_fn(field->buffer);
+            field->buffer = NULL;
+        }
+        if (field->placeholder) {
+            ctx->free_fn(field->placeholder);
+            field->placeholder = NULL;
+        }
+    }
+    ctx->auto_text_fields.len = reuse_index;
 
     hui_ctx_accumulate_dirty(ctx, HUI_DIRTY_STYLE | HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT);
     return HUI_OK;
+
+rebuild_fail:
+    hui_auto_text_fields_reset(ctx);
+    return status;
 }
 
 static size_t hui_strnlen(const char *text, size_t max_len) {
@@ -1091,6 +1161,15 @@ int hui_render(hui_ctx *ctx, const hui_build_opts *opts, hui_render_output *out)
     int needs_layout = opts_changed || !ctx->draw_valid || ((pending_dirty & HUI_DIRTY_LAYOUT) != 0) || needs_style;
     int needs_paint = opts_changed || !ctx->draw_valid || ((pending_dirty & HUI_DIRTY_PAINT) != 0) || needs_layout;
     int status = HUI_OK;
+
+    if (!needs_style && !needs_layout && !needs_paint) {
+        local_out.changed = 0;
+        local_out.dirty_flags = pending_dirty;
+        local_out.draw.items = ctx->draw.cmds.data;
+        local_out.draw.count = ctx->draw.cmds.len;
+        if (out) *out = local_out;
+        return status;
+    }
 
     if (!needs_style && !needs_layout && !needs_paint) {
         local_out.changed = 0;

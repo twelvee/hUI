@@ -136,7 +136,10 @@ static void process_pointer_input(hui_ctx *ctx, pointer_state *state) {
     if (inside) {
         Vector2 pos = GetMousePosition();
         uint32_t buttons = read_pointer_buttons();
-        if (!state->inside || pos.x != state->pos.x || pos.y != state->pos.y) {
+        float dx = pos.x - state->pos.x;
+        float dy = pos.y - state->pos.y;
+        int moved = !state->inside || (fabsf(dx) + fabsf(dy)) > 0.5f;
+        if (moved) {
             hui_input_event ev;
             memset(&ev, 0, sizeof(ev));
             ev.type = HUI_INPUT_EVENT_POINTER_MOVE;
