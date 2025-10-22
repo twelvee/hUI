@@ -496,6 +496,10 @@ static uint32_t hui_text_field_replace_range(hui_ctx *ctx, hui_text_field *field
     if (start > available) start = available;
     if (end > available) end = available;
 
+    size_t current_len = field->buffer ? strlen(field->buffer) : 0;
+    if (current_len > available) current_len = available;
+    if (field->length != current_len) field->length = current_len;
+
     size_t tail_len = (end < field->length) ? (field->length - end) : 0;
     size_t desired_len = start + data_len + tail_len;
     if (desired_len > available) {
@@ -756,7 +760,11 @@ uint32_t hui_text_field_step(hui_ctx *ctx, hui_text_field *field, float dt) {
         dirty |= HUI_DIRTY_PAINT;
     }
 
-    if (field->selecting && primary_down) {
+    int keyboard_activity = (state->text_input.count > 0) ||
+                            (state->keys_pressed.count > 0) ||
+                            field->nav_active_key != 0;
+
+    if (field->selecting && primary_down && !keyboard_activity) {
         float px = state->pointer_x;
         float py = state->pointer_y;
         size_t caret_offset = hui_text_field_caret_from_point(ctx, field, px, py);
@@ -831,12 +839,16 @@ uint32_t hui_text_field_step(hui_ctx *ctx, hui_text_field *field, float dt) {
     }
     if (state->text_input.count > 0) {
         hui_text_field_cancel_nav(field);
+        field->selecting = 0;
         dirty |= hui_text_field_hide_placeholder(ctx, field);
-        sel_start = hui_text_field_selection_start(field);
-        sel_end = hui_text_field_selection_end(field);
-        size_t caret = sel_start;
-        if (sel_end > sel_start) {
-            dirty |= hui_text_field_delete_range(ctx, field, sel_start, sel_end);
+        size_t actual_len = strlen(field->buffer);
+        if (field->length != actual_len)
+            field->length = actual_len;
+        size_t sel_start_bytes = field->caret < field->sel_anchor ? field->caret : field->sel_anchor;
+        size_t sel_end_bytes = field->caret < field->sel_anchor ? field->sel_anchor : field->caret;
+        size_t caret = sel_start_bytes;
+        if (sel_end_bytes > sel_start_bytes) {
+            dirty |= hui_text_field_delete_range(ctx, field, sel_start_bytes, sel_end_bytes);
         } else {
             caret = field->caret;
         }
@@ -854,6 +866,7 @@ uint32_t hui_text_field_step(hui_ctx *ctx, hui_text_field *field, float dt) {
         hui_text_field_nav_triggered(ctx, field, state, field->keymap.move_left, dt)) {
         size_t new_caret = hui_utf8_prev(field->buffer, field->length, field->caret);
         size_t anchor = shift_down ? field->sel_anchor : new_caret;
+        field->selecting = 0;
         hui_text_field_set_selection_internal(ctx, field, anchor, new_caret, 1);
         dirty |= HUI_DIRTY_PAINT;
     }
@@ -862,6 +875,7 @@ uint32_t hui_text_field_step(hui_ctx *ctx, hui_text_field *field, float dt) {
         hui_text_field_nav_triggered(ctx, field, state, field->keymap.move_right, dt)) {
         size_t new_caret = hui_utf8_next(field->buffer, field->length, field->caret);
         size_t anchor = shift_down ? field->sel_anchor : new_caret;
+        field->selecting = 0;
         hui_text_field_set_selection_internal(ctx, field, anchor, new_caret, 1);
         dirty |= HUI_DIRTY_PAINT;
     }
@@ -869,6 +883,7 @@ uint32_t hui_text_field_step(hui_ctx *ctx, hui_text_field *field, float dt) {
     if (field->keymap.move_home &&
         hui_text_field_nav_triggered(ctx, field, state, field->keymap.move_home, dt)) {
         size_t anchor = shift_down ? field->sel_anchor : 0;
+        field->selecting = 0;
         hui_text_field_set_selection_internal(ctx, field, anchor, 0, 1);
         dirty |= HUI_DIRTY_PAINT;
     }
@@ -877,6 +892,7 @@ uint32_t hui_text_field_step(hui_ctx *ctx, hui_text_field *field, float dt) {
         hui_text_field_nav_triggered(ctx, field, state, field->keymap.move_end, dt)) {
         size_t end_pos = field->length;
         size_t anchor = shift_down ? field->sel_anchor : end_pos;
+        field->selecting = 0;
         hui_text_field_set_selection_internal(ctx, field, anchor, end_pos, 1);
         dirty |= HUI_DIRTY_PAINT;
     }
@@ -903,29 +919,46 @@ uint32_t hui_text_field_step(hui_ctx *ctx, hui_text_field *field, float dt) {
                             hui_view_contains(&state->keys_pressed, field->keymap.backspace);
     int backspace_down = field->keymap.backspace &&
                          hui_input_key_down(ctx, field->keymap.backspace);
-    if (backspace_pressed || (backspace_down && field->backspace_timer <= 0.0f)) {
+    int backspace_repeats = 0;
+
+    if (backspace_pressed) {
+        backspace_repeats = 1;
+        field->backspace_timer = field->backspace_initial_delay;
+    } else if (backspace_down) {
+        field->backspace_timer -= dt;
+        if (field->backspace_repeat_delay > 0.0f) {
+            while (field->backspace_timer <= 0.0f) {
+                backspace_repeats++;
+                field->backspace_timer += field->backspace_repeat_delay;
+            }
+        } else if (field->backspace_timer <= 0.0f) {
+            backspace_repeats = 1;
+            field->backspace_timer = 0.0f;
+        }
+    } else {
+        field->backspace_timer = 0.0f;
+    }
+
+    if (backspace_repeats > 0) {
         dirty |= hui_text_field_hide_placeholder(ctx, field);
-        sel_start = hui_text_field_selection_start(field);
-        sel_end = hui_text_field_selection_end(field);
-        if (sel_end > sel_start) {
-            dirty |= hui_text_field_delete_range(ctx, field, sel_start, sel_end);
-            hui_text_field_set_selection_internal(ctx, field, sel_start, sel_start, 1);
-            dirty |= HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT;
-        } else if (field->caret > 0) {
-            size_t prev = hui_utf8_prev(field->buffer, field->length, field->caret);
-            if (prev != field->caret) {
+        for (int repeat = 0; repeat < backspace_repeats; repeat++) {
+            sel_start = hui_text_field_selection_start(field);
+            sel_end = hui_text_field_selection_end(field);
+            if (sel_end > sel_start) {
+                dirty |= hui_text_field_delete_range(ctx, field, sel_start, sel_end);
+                hui_text_field_set_selection_internal(ctx, field, sel_start, sel_start, 1);
+                dirty |= HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT;
+            } else if (field->caret > 0) {
+                size_t prev = hui_utf8_prev(field->buffer, field->length, field->caret);
+                if (prev == field->caret) break;
                 dirty |= hui_text_field_delete_range(ctx, field, prev, field->caret);
                 hui_text_field_set_selection_internal(ctx, field, prev, prev, 1);
                 dirty |= HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT;
+            } else {
+                break;
             }
         }
         dirty |= hui_text_field_refresh_placeholder(ctx, field);
-        field->backspace_timer = backspace_pressed ? field->backspace_initial_delay : field->backspace_repeat_delay;
-    } else if (backspace_down) {
-        if (field->backspace_timer > 0.0f)
-            field->backspace_timer -= dt;
-    } else {
-        field->backspace_timer = 0.0f;
     }
 
     if (!hui_text_field_has_selection(field) && !field->selecting) {
