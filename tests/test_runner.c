@@ -21,6 +21,8 @@ enum {
     TEST_KEY_RIGHT = 1001,
     TEST_KEY_HOME = 1002,
     TEST_KEY_END = 1003,
+    TEST_KEY_UP = 1004,
+    TEST_KEY_DOWN = 1005,
     TEST_KEY_DELETE = 127,
     TEST_KEY_CUT = 'X'
 };
@@ -215,6 +217,8 @@ static void test_auto_text_input(void) {
         .cut = TEST_KEY_CUT,
         .move_left = TEST_KEY_LEFT,
         .move_right = TEST_KEY_RIGHT,
+        .move_up = TEST_KEY_UP,
+        .move_down = TEST_KEY_DOWN,
         .move_home = TEST_KEY_HOME,
         .move_end = TEST_KEY_END,
         .delete_forward = TEST_KEY_DELETE
@@ -520,6 +524,8 @@ static void test_text_field_interaction(void) {
         .cut = TEST_KEY_CUT,
         .move_left = TEST_KEY_LEFT,
         .move_right = TEST_KEY_RIGHT,
+        .move_up = TEST_KEY_UP,
+        .move_down = TEST_KEY_DOWN,
         .move_home = TEST_KEY_HOME,
         .move_end = TEST_KEY_END,
         .delete_forward = TEST_KEY_DELETE
@@ -768,6 +774,8 @@ static void test_textarea_multiline(void) {
         .cut = TEST_KEY_CUT,
         .move_left = TEST_KEY_LEFT,
         .move_right = TEST_KEY_RIGHT,
+        .move_up = TEST_KEY_UP,
+        .move_down = TEST_KEY_DOWN,
         .move_home = TEST_KEY_HOME,
         .move_end = TEST_KEY_END,
         .delete_forward = TEST_KEY_DELETE
@@ -807,6 +815,98 @@ static void test_textarea_multiline(void) {
     ASSERT(strcmp(hui_text_field_text(&field), "Hello\nWorld\n") == 0);
 
     ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    ASSERT(hui_text_field_set_text(ctx, &field, "One\nTwo\nThree") != 0);
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+    ASSERT(hui_input_set_focus(ctx, field.container) == HUI_OK);
+
+    hui_input_event key_ev = {0};
+    key_ev.type = HUI_INPUT_EVENT_KEY_DOWN;
+    key_ev.data.key.keycode = TEST_KEY_HOME;
+    key_ev.data.key.modifiers = 0;
+    ASSERT(hui_push_input(ctx, &key_ev) == HUI_OK);
+    dirty = hui_process_input(ctx);
+    dirty |= hui_text_field_step(ctx, &field, 0.016f);
+    key_ev.type = HUI_INPUT_EVENT_KEY_UP;
+    ASSERT(hui_push_input(ctx, &key_ev) == HUI_OK);
+    dirty = hui_process_input(ctx);
+    dirty |= hui_text_field_step(ctx, &field, 0.016f);
+    ASSERT(field.caret == strlen("One\nTwo\n"));
+
+    key_ev.type = HUI_INPUT_EVENT_KEY_DOWN;
+    key_ev.data.key.keycode = TEST_KEY_UP;
+    key_ev.data.key.modifiers = 0;
+    ASSERT(hui_push_input(ctx, &key_ev) == HUI_OK);
+    dirty = hui_process_input(ctx);
+    dirty |= hui_text_field_step(ctx, &field, 0.016f);
+    key_ev.type = HUI_INPUT_EVENT_KEY_UP;
+    ASSERT(hui_push_input(ctx, &key_ev) == HUI_OK);
+    dirty = hui_process_input(ctx);
+    dirty |= hui_text_field_step(ctx, &field, 0.016f);
+    ASSERT(field.caret == strlen("One\n"));
+
+    key_ev.type = HUI_INPUT_EVENT_KEY_DOWN;
+    key_ev.data.key.keycode = TEST_KEY_RIGHT;
+    key_ev.data.key.modifiers = 0;
+    ASSERT(hui_push_input(ctx, &key_ev) == HUI_OK);
+    dirty = hui_process_input(ctx);
+    dirty |= hui_text_field_step(ctx, &field, 0.016f);
+    key_ev.type = HUI_INPUT_EVENT_KEY_UP;
+    ASSERT(hui_push_input(ctx, &key_ev) == HUI_OK);
+    dirty = hui_process_input(ctx);
+    dirty |= hui_text_field_step(ctx, &field, 0.016f);
+
+    key_ev.type = HUI_INPUT_EVENT_KEY_DOWN;
+    key_ev.data.key.keycode = TEST_KEY_RIGHT;
+    ASSERT(hui_push_input(ctx, &key_ev) == HUI_OK);
+    dirty = hui_process_input(ctx);
+    dirty |= hui_text_field_step(ctx, &field, 0.016f);
+    key_ev.type = HUI_INPUT_EVENT_KEY_UP;
+    ASSERT(hui_push_input(ctx, &key_ev) == HUI_OK);
+    dirty = hui_process_input(ctx);
+    dirty |= hui_text_field_step(ctx, &field, 0.016f);
+    ASSERT(field.caret == strlen("One\n") + 2);
+
+    key_ev.type = HUI_INPUT_EVENT_KEY_DOWN;
+    key_ev.data.key.keycode = TEST_KEY_DOWN;
+    key_ev.data.key.modifiers = 0;
+    ASSERT(hui_push_input(ctx, &key_ev) == HUI_OK);
+    dirty = hui_process_input(ctx);
+    dirty |= hui_text_field_step(ctx, &field, 0.016f);
+    key_ev.type = HUI_INPUT_EVENT_KEY_UP;
+    ASSERT(hui_push_input(ctx, &key_ev) == HUI_OK);
+    dirty = hui_process_input(ctx);
+    dirty |= hui_text_field_step(ctx, &field, 0.016f);
+    ASSERT(field.caret == strlen("One\nTwo\n") + 2);
+
+    key_ev.type = HUI_INPUT_EVENT_KEY_DOWN;
+    key_ev.data.key.keycode = TEST_KEY_END;
+    key_ev.data.key.modifiers = 0;
+    ASSERT(hui_push_input(ctx, &key_ev) == HUI_OK);
+    dirty = hui_process_input(ctx);
+    dirty |= hui_text_field_step(ctx, &field, 0.016f);
+    key_ev.type = HUI_INPUT_EVENT_KEY_UP;
+    ASSERT(hui_push_input(ctx, &key_ev) == HUI_OK);
+    dirty = hui_process_input(ctx);
+    dirty |= hui_text_field_step(ctx, &field, 0.016f);
+    ASSERT(field.caret == strlen("One\nTwo\nThree"));
+
+    key_ev.type = HUI_INPUT_EVENT_KEY_DOWN;
+    key_ev.data.key.keycode = TEST_KEY_HOME;
+    key_ev.data.key.modifiers = HUI_KEY_MOD_SHIFT;
+    ASSERT(hui_push_input(ctx, &key_ev) == HUI_OK);
+    dirty = hui_process_input(ctx);
+    dirty |= hui_text_field_step(ctx, &field, 0.016f);
+    key_ev.type = HUI_INPUT_EVENT_KEY_UP;
+    key_ev.data.key.modifiers = 0;
+    ASSERT(hui_push_input(ctx, &key_ev) == HUI_OK);
+    dirty = hui_process_input(ctx);
+    dirty |= hui_text_field_step(ctx, &field, 0.016f);
+    ASSERT(field.caret == strlen("One\nTwo\n"));
+    size_t sel_start = field.sel_anchor < field.caret ? field.sel_anchor : field.caret;
+    size_t sel_end = field.sel_anchor > field.caret ? field.sel_anchor : field.caret;
+    ASSERT(sel_start == strlen("One\nTwo\n"));
+    ASSERT(sel_end == strlen("One\nTwo\nThree"));
 
     hui_destroy(ctx);
 }

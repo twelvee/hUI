@@ -269,6 +269,8 @@ typedef struct {
     uint32_t cut;
     uint32_t move_left;
     uint32_t move_right;
+    uint32_t move_up;
+    uint32_t move_down;
     uint32_t move_home;
     uint32_t move_end;
     uint32_t delete_forward;
@@ -315,6 +317,7 @@ typedef struct {
     float scroll_y;
     uint32_t nav_active_key;
     float nav_timer;
+    size_t nav_preferred_column;
     hui_clipboard_iface clipboard;
     hui_text_field_keymap keymap;
 } hui_text_field;

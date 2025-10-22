@@ -36,6 +36,7 @@ static void draw_text_utf8(hui_ctx *ctx, const hui_draw *cmd) {
 
     float font_size = cmd->f[4] > 0.0f ? cmd->f[4] : 16.0f;
     float scroll_x = cmd->f[5];
+    float line_height = font_size * HUI_TEXT_APPROX_LINE_HEIGHT;
     int clip_scissor = (scroll_x >= 0.0f) && (cmd->f[2] > 0.0f) && (cmd->f[3] > 0.0f);
     if (clip_scissor) {
         int sx = (int) floorf(cmd->f[0]);
@@ -57,6 +58,16 @@ static void draw_text_utf8(hui_ctx *ctx, const hui_draw *cmd) {
         if (consumed <= 0) {
             consumed = 1;
             codepoint = (unsigned char) buffer[idx];
+        }
+        if (codepoint == '\r') {
+            idx += (size_t) consumed;
+            continue;
+        }
+        if (codepoint == '\n') {
+            pen.x = draw_x;
+            pen.y += line_height;
+            idx += (size_t) consumed;
+            continue;
         }
         DrawTextCodepoint(font, codepoint, pen, font_size, hui_color_from_argb(cmd->u0));
         pen.x += char_width;
@@ -191,6 +202,8 @@ static void process_key_input(hui_ctx *ctx) {
         KEY_X,
         KEY_LEFT,
         KEY_RIGHT,
+        KEY_UP,
+        KEY_DOWN,
         KEY_HOME,
         KEY_END,
         KEY_ENTER
@@ -298,6 +311,8 @@ int main(void) {
         .cut = KEY_X,
         .move_left = KEY_LEFT,
         .move_right = KEY_RIGHT,
+        .move_up = KEY_UP,
+        .move_down = KEY_DOWN,
         .move_home = KEY_HOME,
         .move_end = KEY_END,
         .delete_forward = KEY_DELETE

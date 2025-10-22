@@ -166,6 +166,76 @@ static size_t hui_text_field_line_length_from_cp(const char *text, size_t len, s
     return cols;
 }
 
+static void hui_text_field_set_selection_internal(hui_ctx *ctx, hui_text_field *field,
+                                                  size_t anchor, size_t caret, int reset_blink);
+
+static void hui_text_field_cp_to_line_col(const char *text, size_t len, size_t cp_index,
+                                          size_t *out_line, size_t *out_col) {
+    size_t cp_total = hui_utf8_count_total(text, len);
+    if (cp_index > cp_total) cp_index = cp_total;
+    size_t line = 0;
+    size_t line_start_cp = 0;
+    size_t cp = 0;
+    size_t pos = 0;
+    while (pos < len && cp < cp_index) {
+        unsigned char ch = (unsigned char) text[pos];
+        size_t next = hui_utf8_next(text, len, pos);
+        cp++;
+        if (ch == '\n') {
+            line++;
+            line_start_cp = cp;
+        }
+        pos = next;
+    }
+    if (out_line) *out_line = line;
+    if (out_col) *out_col = cp_index - line_start_cp;
+}
+
+static uint32_t hui_text_field_move_vertical(hui_ctx *ctx, hui_text_field *field,
+                                             int direction, int extend_selection) {
+    if (!ctx || !field) return 0;
+    if (!field->multiline) return 0;
+    if (direction == 0) return 0;
+    if (field->placeholder_visible) return 0;
+
+    const char *text = field->buffer;
+    size_t len = field->length;
+    size_t caret_cp = hui_utf8_count_range(text, 0, field->caret);
+    size_t current_line = 0;
+    size_t current_col = 0;
+    hui_text_field_cp_to_line_col(text, len, caret_cp, &current_line, &current_col);
+    size_t desired_col = (field->nav_preferred_column != SIZE_MAX)
+                         ? field->nav_preferred_column
+                         : current_col;
+
+    size_t line_count = hui_text_field_count_lines(text, len);
+    if (line_count == 0) line_count = 1;
+    size_t target_line = current_line;
+    if (direction < 0) {
+        if (current_line > 0) target_line = current_line - 1;
+    } else {
+        if (current_line + 1 < line_count) target_line = current_line + 1;
+    }
+
+    size_t start_cp = hui_text_field_line_start_cp(text, len, target_line);
+    size_t line_len = hui_text_field_line_length_from_cp(text, len, start_cp);
+    size_t target_col = desired_col;
+    if (target_col > line_len) target_col = line_len;
+    size_t target_cp = start_cp + target_col;
+    size_t new_caret = hui_utf8_offset_for_index(text, len, target_cp);
+
+    if (new_caret == field->caret) {
+        field->nav_preferred_column = desired_col;
+        return 0;
+    }
+
+    size_t anchor = extend_selection ? field->sel_anchor : new_caret;
+    field->selecting = 0;
+    hui_text_field_set_selection_internal(ctx, field, anchor, new_caret, 1);
+    field->nav_preferred_column = desired_col;
+    return HUI_DIRTY_PAINT;
+}
+
 static size_t hui_text_field_caret_from_point(hui_ctx *ctx, hui_text_field *field, float px, float py) {
     (void) ctx;
     if (!field) return 0;
@@ -370,6 +440,7 @@ static void hui_text_field_set_selection_internal(hui_ctx *ctx, hui_text_field *
     field->caret = caret;
     field->select_all = (field->length > 0 && hui_text_field_selection_start(field) == 0 &&
                          hui_text_field_selection_end(field) == field->length);
+    field->nav_preferred_column = SIZE_MAX;
     if (reset_blink) hui_text_field_reset_blink(field);
     hui_text_field_update_dom_state(ctx, field);
 }
@@ -394,6 +465,7 @@ static uint32_t hui_text_field_show_placeholder(hui_ctx *ctx, hui_text_field *fi
     hui_text_field_cancel_nav(field);
     uint32_t dirty = 0;
     field->placeholder_visible = 1;
+    field->nav_preferred_column = SIZE_MAX;
     if (!was_visible) {
         if (hui_dom_set_text(ctx, field->text, field->placeholder) == HUI_OK)
             dirty |= HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT;
@@ -409,6 +481,7 @@ static uint32_t hui_text_field_show_placeholder(hui_ctx *ctx, hui_text_field *fi
 static uint32_t hui_text_field_hide_placeholder(hui_ctx *ctx, hui_text_field *field) {
     if (!field->placeholder_visible) return 0;
     field->placeholder_visible = 0;
+    field->nav_preferred_column = SIZE_MAX;
     uint32_t dirty = 0;
     dirty |= hui_text_field_apply_text(ctx, field);
     if (hui_dom_remove_class(ctx, field->container, "placeholder") == HUI_OK)
@@ -663,6 +736,7 @@ int hui_text_field_init(hui_ctx *ctx, hui_text_field *field, const hui_text_fiel
     hui_text_field_refresh_placeholder(ctx, field);
     field->caret = field->length;
     field->sel_anchor = field->caret;
+    field->nav_preferred_column = SIZE_MAX;
     hui_text_field_update_dom_state(ctx, field);
     return HUI_OK;
 }
@@ -888,20 +962,45 @@ uint32_t hui_text_field_step(hui_ctx *ctx, hui_text_field *field, float dt) {
         dirty |= HUI_DIRTY_PAINT;
     }
 
+    if (field->multiline && field->keymap.move_up &&
+        hui_text_field_nav_triggered(ctx, field, state, field->keymap.move_up, dt)) {
+        dirty |= hui_text_field_move_vertical(ctx, field, -1, shift_down);
+    }
+
+    if (field->multiline && field->keymap.move_down &&
+        hui_text_field_nav_triggered(ctx, field, state, field->keymap.move_down, dt)) {
+        dirty |= hui_text_field_move_vertical(ctx, field, 1, shift_down);
+    }
+
     if (field->keymap.move_home &&
         hui_text_field_nav_triggered(ctx, field, state, field->keymap.move_home, dt)) {
-        size_t anchor = shift_down ? field->sel_anchor : 0;
+        size_t caret_cp = hui_utf8_count_range(field->buffer, 0, field->caret);
+        size_t line_idx = 0;
+        size_t column = 0;
+        hui_text_field_cp_to_line_col(field->buffer, field->length, caret_cp, &line_idx, &column);
+        size_t line_start_cp = hui_text_field_line_start_cp(field->buffer, field->length, line_idx);
+        size_t new_caret = hui_utf8_offset_for_index(field->buffer, field->length, line_start_cp);
+        size_t anchor = shift_down ? field->sel_anchor : new_caret;
         field->selecting = 0;
-        hui_text_field_set_selection_internal(ctx, field, anchor, 0, 1);
+        hui_text_field_set_selection_internal(ctx, field, anchor, new_caret, 1);
+        field->nav_preferred_column = 0;
         dirty |= HUI_DIRTY_PAINT;
     }
 
     if (field->keymap.move_end &&
         hui_text_field_nav_triggered(ctx, field, state, field->keymap.move_end, dt)) {
-        size_t end_pos = field->length;
-        size_t anchor = shift_down ? field->sel_anchor : end_pos;
+        size_t caret_cp = hui_utf8_count_range(field->buffer, 0, field->caret);
+        size_t line_idx = 0;
+        size_t column = 0;
+        hui_text_field_cp_to_line_col(field->buffer, field->length, caret_cp, &line_idx, &column);
+        size_t line_start_cp = hui_text_field_line_start_cp(field->buffer, field->length, line_idx);
+        size_t line_len_cp = hui_text_field_line_length_from_cp(field->buffer, field->length, line_start_cp);
+        size_t line_end_cp = line_start_cp + line_len_cp;
+        size_t new_caret = hui_utf8_offset_for_index(field->buffer, field->length, line_end_cp);
+        size_t anchor = shift_down ? field->sel_anchor : new_caret;
         field->selecting = 0;
-        hui_text_field_set_selection_internal(ctx, field, anchor, end_pos, 1);
+        hui_text_field_set_selection_internal(ctx, field, anchor, new_caret, 1);
+        field->nav_preferred_column = line_len_cp;
         dirty |= HUI_DIRTY_PAINT;
     }
 
