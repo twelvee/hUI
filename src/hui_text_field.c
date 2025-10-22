@@ -374,6 +374,11 @@ static void hui_text_field_set_selection_internal(hui_ctx *ctx, hui_text_field *
     hui_text_field_update_dom_state(ctx, field);
 }
 static uint32_t hui_text_field_apply_text(hui_ctx *ctx, hui_text_field *field) {
+    if (field->placeholder_visible && field->length == 0) {
+        field->placeholder_visible = 0;
+        hui_text_field_update_dom_state(ctx, field);
+        return 0;
+    }
     if (hui_dom_set_text(ctx, field->text, field->buffer) != HUI_OK) return 0;
     hui_text_field_update_dom_state(ctx, field);
     return HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT;
@@ -382,17 +387,19 @@ static uint32_t hui_text_field_apply_text(hui_ctx *ctx, hui_text_field *field) {
 static uint32_t hui_text_field_show_placeholder(hui_ctx *ctx, hui_text_field *field) {
     if (!field->placeholder) return 0;
     int was_visible = field->placeholder_visible;
-    field->placeholder_visible = 1;
     field->caret = 0;
     field->sel_anchor = 0;
     field->caret_visible = 0;
     field->select_all = 0;
     hui_text_field_cancel_nav(field);
     uint32_t dirty = 0;
-    if (hui_dom_set_text(ctx, field->text, field->placeholder) == HUI_OK)
-        dirty |= HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT;
-    if (!was_visible && hui_dom_add_class(ctx, field->container, "placeholder") == HUI_OK)
-        dirty |= HUI_DIRTY_STYLE | HUI_DIRTY_PAINT;
+    field->placeholder_visible = 1;
+    if (!was_visible) {
+        if (hui_dom_set_text(ctx, field->text, field->placeholder) == HUI_OK)
+            dirty |= HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT;
+        if (hui_dom_add_class(ctx, field->container, "placeholder") == HUI_OK)
+            dirty |= HUI_DIRTY_STYLE | HUI_DIRTY_PAINT;
+    }
     field->scroll_x = 0.0f;
     field->scroll_y = 0.0f;
     hui_text_field_update_dom_state(ctx, field);
