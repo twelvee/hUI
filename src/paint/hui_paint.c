@@ -108,6 +108,159 @@ static void hui_paint_cp_to_line_col(const char *text, size_t len, size_t target
     if (out_col) *out_col = column;
 }
 
+#define HUI_TEXT_SELECTION_COLOR 0x663A7AFEu
+
+static int hui_node_visible(const hui_dom_node *node, float viewport_w, float viewport_h);
+
+static void hui_paint_node(hui_draw_list *list, const hui_dom *dom, const hui_style_store *styles,
+                           uint32_t idx, float viewport_w, float viewport_h) {
+    if (!list || !dom || !styles) return;
+    if (idx >= dom->nodes.len) return;
+    if (idx >= styles->styles.len) return;
+    const hui_dom_node *node = &dom->nodes.data[idx];
+    const hui_computed_style *cs = &styles->styles.data[idx];
+    if (cs->display == 0) return;
+    if (!hui_node_visible(node, viewport_w, viewport_h)) return;
+
+    if (node->type == HUI_NODE_ELEM) {
+        if ((cs->present_mask & HUI_STYLE_PRESENT_BG_COLOR) && (cs->bg_color >> 24) != 0) {
+            hui_draw draw;
+            memset(&draw, 0, sizeof(draw));
+            draw.op = HUI_DRAW_OP_RECT;
+            draw.u0 = cs->bg_color;
+            draw.u1 = idx;
+            draw.f[0] = node->x;
+            draw.f[1] = node->y;
+            draw.f[2] = node->w;
+            draw.f[3] = node->h;
+            hui_vec_push(&list->cmds, draw);
+        }
+    }
+
+    if (node->type == HUI_NODE_TEXT) {
+        int is_text_field = (node->tf_flags & HUI_NODE_TF_VALUE) != 0;
+        const char *text = node->text ? node->text : "";
+        size_t len = node->text ? node->text_len : 0;
+        int has_text = (text && len > 0);
+
+        float font_size = cs->font_size > 0.0f ? cs->font_size : 16.0f;
+        float char_width = font_size * HUI_TEXT_APPROX_CHAR_ADVANCE;
+        float line_height = font_size * HUI_TEXT_APPROX_LINE_HEIGHT;
+        size_t cp_total = has_text ? hui_paint_utf8_count_total(text, len) : 0;
+        size_t line_count = has_text ? hui_paint_count_lines(text, len) : 1;
+        if (line_count == 0) line_count = 1;
+
+        float scroll_x = is_text_field ? node->tf_scroll_x : 0.0f;
+
+        if (is_text_field) {
+            if ((node->tf_flags & HUI_NODE_TF_HAS_SELECTION) != 0 &&
+                (node->tf_flags & HUI_NODE_TF_PLACEHOLDER) == 0 &&
+                node->tf_sel_end > node->tf_sel_start) {
+                size_t sel_start_cp = node->tf_sel_start;
+                size_t sel_end_cp = node->tf_sel_end;
+                if (sel_start_cp > cp_total) sel_start_cp = cp_total;
+                if (sel_end_cp > cp_total) sel_end_cp = cp_total;
+                if (sel_end_cp > sel_start_cp) {
+                    size_t start_line = 0, start_col = 0;
+                    size_t end_line = 0, end_col = 0;
+                    hui_paint_cp_to_line_col(text, len, sel_start_cp, &start_line, &start_col);
+                    hui_paint_cp_to_line_col(text, len, sel_end_cp, &end_line, &end_col);
+                    if (end_line >= start_line) {
+                        for (size_t line = start_line; line <= end_line; line++) {
+                            size_t line_start_cp = hui_paint_line_start_cp(text, len, line);
+                            size_t line_len = hui_paint_line_length_from_cp(text, len, line_start_cp);
+                            size_t line_start_col = (line == start_line) ? start_col : 0;
+                            size_t line_end_col = (line == end_line) ? end_col : line_len;
+                            if (line_start_col > line_len) line_start_col = line_len;
+                            if (line_end_col > line_len) line_end_col = line_len;
+                            if (line_end_col <= line_start_col) continue;
+                            float highlight_x = node->x - scroll_x + char_width * (float) line_start_col;
+                            float highlight_w = char_width * (float) (line_end_col - line_start_col);
+                            float highlight_y = node->y + line_height * (float) line;
+                            if (node->w > 0.0f) {
+                                float max_x = node->x + node->w;
+                                if (highlight_x < node->x) {
+                                    float delta = node->x - highlight_x;
+                                    highlight_x = node->x;
+                                    highlight_w = fmaxf(0.0f, highlight_w - delta);
+                                }
+                                if (highlight_x + highlight_w > max_x)
+                                    highlight_w = max_x - highlight_x;
+                            }
+                            if (highlight_w <= 0.0f) continue;
+                            hui_draw highlight;
+                            memset(&highlight, 0, sizeof(highlight));
+                            highlight.op = HUI_DRAW_OP_RECT;
+                            highlight.u0 = HUI_TEXT_SELECTION_COLOR;
+                            highlight.u1 = idx;
+                            highlight.f[0] = highlight_x;
+                            highlight.f[1] = highlight_y;
+                            highlight.f[2] = highlight_w;
+                            highlight.f[3] = line_height;
+                            hui_vec_push(&list->cmds, highlight);
+                        }
+                    }
+                }
+            }
+
+            if ((node->tf_flags & (HUI_NODE_TF_FOCUSED | HUI_NODE_TF_CARET_VISIBLE)) ==
+                (HUI_NODE_TF_FOCUSED | HUI_NODE_TF_CARET_VISIBLE) &&
+                (node->tf_flags & HUI_NODE_TF_PLACEHOLDER) == 0) {
+                size_t caret_cp = node->tf_caret;
+                size_t caret_line = 0;
+                size_t caret_col = 0;
+                hui_paint_cp_to_line_col(text, len, caret_cp, &caret_line, &caret_col);
+                float caret_x = node->x - scroll_x + char_width * (float) caret_col;
+                float caret_y = node->y + line_height * (float) caret_line;
+                if (node->w > 0.0f) {
+                    float min_x = node->x;
+                    float max_x = node->x + node->w;
+                    if (caret_x < min_x) caret_x = min_x;
+                    if (caret_x > max_x) caret_x = max_x;
+                }
+                float caret_h = (line_count > 1) ? line_height : node->h;
+                if (caret_h <= 0.0f) caret_h = line_height;
+                hui_draw caret;
+                memset(&caret, 0, sizeof(caret));
+                caret.op = HUI_DRAW_OP_RECT;
+                caret.u0 = (cs->color & 0x00FFFFFFu) | 0xFF000000u;
+                caret.u1 = idx;
+                caret.f[0] = caret_x;
+                caret.f[1] = caret_y;
+                caret.f[2] = fmaxf(char_width * 0.1f, 1.0f);
+                caret.f[3] = caret_h;
+                hui_vec_push(&list->cmds, caret);
+            }
+        }
+
+        if (has_text) {
+            hui_draw draw;
+            memset(&draw, 0, sizeof(draw));
+            draw.f[5] = -1.0f;
+            draw.op = HUI_DRAW_OP_GLYPH_RUN;
+            draw.u0 = cs->color;
+            draw.u1 = idx;
+            draw.f[0] = node->x;
+            draw.f[1] = node->y;
+            draw.f[2] = node->w;
+            draw.f[3] = node->h;
+            draw.f[4] = cs->font_size;
+            draw.f[5] = scroll_x;
+            hui_vec_push(&list->cmds, draw);
+        }
+    }
+
+    if (node->type == HUI_NODE_ELEM) {
+        uint32_t child = node->first_child;
+        while (child != 0xFFFFFFFFu) {
+            if (child >= dom->nodes.len) break;
+            hui_paint_node(list, dom, styles, child, viewport_w, viewport_h);
+            child = dom->nodes.data[child].next_sibling;
+        }
+    }
+}
+
+
 void hui_draw_list_init(hui_draw_list *list) {
     hui_vec_init(&list->cmds);
 }
@@ -117,8 +270,6 @@ void hui_draw_list_reset(hui_draw_list *list) {
     list->cmds.data = NULL;
     list->cmds.len = list->cmds.cap = 0;
 }
-
-#define HUI_TEXT_SELECTION_COLOR 0x663A7AFEu
 
 static int hui_node_visible(const hui_dom_node *node, float viewport_w, float viewport_h) {
     if (!node) return 0;
@@ -137,137 +288,22 @@ static int hui_node_visible(const hui_dom_node *node, float viewport_w, float vi
 
 void hui_paint_build(hui_draw_list *list, const hui_dom *dom, const hui_style_store *styles,
                      float viewport_w, float viewport_h) {
-    if (!dom || !styles) return;
-    if (dom->nodes.len == 0 || dom->root == 0xFFFFFFFFu) return;
-    if (styles->styles.len < dom->nodes.len) return;
-    for (size_t i = 0; i < dom->nodes.len; i++) {
-        const hui_dom_node *node = &dom->nodes.data[i];
-        const hui_computed_style *cs = &styles->styles.data[i];
-        if (!hui_node_visible(node, viewport_w, viewport_h)) continue;
-        if (cs->display == 0) continue;
-        if (node->type == HUI_NODE_ELEM && (cs->bg_color >> 24) != 0) {
-            hui_draw draw;
-            memset(&draw, 0, sizeof(draw));
-            draw.op = HUI_DRAW_OP_RECT;
-            draw.u0 = cs->bg_color;
-            draw.u1 = (uint32_t) i;
-            draw.f[0] = node->x;
-            draw.f[1] = node->y;
-            draw.f[2] = node->w;
-            draw.f[3] = node->h;
-            hui_vec_push(&list->cmds, draw);
+    if (!list || !dom || !styles) return;
+    if (dom->nodes.len == 0 || styles->styles.len == 0) return;
+    if (dom->root != 0xFFFFFFFFu) {
+        uint32_t node = dom->root;
+        while (node != 0xFFFFFFFFu) {
+            if (node >= dom->nodes.len) break;
+            hui_paint_node(list, dom, styles, node, viewport_w, viewport_h);
+            uint32_t next = dom->nodes.data[node].next_sibling;
+            node = next;
         }
-        if (node->type == HUI_NODE_TEXT) {
-            int is_text_field = (node->tf_flags & HUI_NODE_TF_VALUE) != 0;
-            const char *text = node->text ? node->text : "";
-            size_t len = node->text ? node->text_len : 0;
-            int has_text = (text && len > 0);
-
-            float font_size = cs->font_size > 0.0f ? cs->font_size : 16.0f;
-            float char_width = font_size * HUI_TEXT_APPROX_CHAR_ADVANCE;
-            float line_height = font_size * HUI_TEXT_APPROX_LINE_HEIGHT;
-            size_t cp_total = has_text ? hui_paint_utf8_count_total(text, len) : 0;
-            size_t line_count = has_text ? hui_paint_count_lines(text, len) : 1;
-            if (line_count == 0) line_count = 1;
-
-            float scroll_x = is_text_field ? node->tf_scroll_x : 0.0f;
-
-            if (is_text_field) {
-                if ((node->tf_flags & HUI_NODE_TF_HAS_SELECTION) != 0 &&
-                    (node->tf_flags & HUI_NODE_TF_PLACEHOLDER) == 0 &&
-                    node->tf_sel_end > node->tf_sel_start) {
-                    size_t sel_start_cp = node->tf_sel_start;
-                    size_t sel_end_cp = node->tf_sel_end;
-                    if (sel_start_cp > cp_total) sel_start_cp = cp_total;
-                    if (sel_end_cp > cp_total) sel_end_cp = cp_total;
-                    if (sel_end_cp > sel_start_cp) {
-                        size_t start_line = 0, start_col = 0;
-                        size_t end_line = 0, end_col = 0;
-                        hui_paint_cp_to_line_col(text, len, sel_start_cp, &start_line, &start_col);
-                        hui_paint_cp_to_line_col(text, len, sel_end_cp, &end_line, &end_col);
-                        if (end_line >= start_line) {
-                            for (size_t line = start_line; line <= end_line; line++) {
-                                size_t line_start_cp = hui_paint_line_start_cp(text, len, line);
-                                size_t line_len = hui_paint_line_length_from_cp(text, len, line_start_cp);
-                                size_t line_start_col = (line == start_line) ? start_col : 0;
-                                size_t line_end_col = (line == end_line) ? end_col : line_len;
-                                if (line_start_col > line_len) line_start_col = line_len;
-                                if (line_end_col > line_len) line_end_col = line_len;
-                                if (line_end_col <= line_start_col) continue;
-                                float highlight_x = node->x - scroll_x + char_width * (float) line_start_col;
-                                float highlight_w = char_width * (float) (line_end_col - line_start_col);
-                                float highlight_y = node->y + line_height * (float) line;
-                                if (node->w > 0.0f) {
-                                    float max_x = node->x + node->w;
-                                    if (highlight_x < node->x) {
-                                        float delta = node->x - highlight_x;
-                                        highlight_x = node->x;
-                                        highlight_w = fmaxf(0.0f, highlight_w - delta);
-                                    }
-                                    if (highlight_x + highlight_w > max_x)
-                                        highlight_w = max_x - highlight_x;
-                                }
-                                if (highlight_w <= 0.0f) continue;
-                                hui_draw highlight;
-                                memset(&highlight, 0, sizeof(highlight));
-                                highlight.op = HUI_DRAW_OP_RECT;
-                                highlight.u0 = HUI_TEXT_SELECTION_COLOR;
-                                highlight.u1 = (uint32_t) i;
-                                highlight.f[0] = highlight_x;
-                                highlight.f[1] = highlight_y;
-                                highlight.f[2] = highlight_w;
-                                highlight.f[3] = line_height;
-                                hui_vec_push(&list->cmds, highlight);
-                            }
-                        }
-                    }
-                }
-
-                if ((node->tf_flags & (HUI_NODE_TF_FOCUSED | HUI_NODE_TF_CARET_VISIBLE)) ==
-                    (HUI_NODE_TF_FOCUSED | HUI_NODE_TF_CARET_VISIBLE) &&
-                    (node->tf_flags & HUI_NODE_TF_PLACEHOLDER) == 0) {
-                    size_t caret_cp = node->tf_caret;
-                    size_t caret_line = 0;
-                    size_t caret_col = 0;
-                    hui_paint_cp_to_line_col(text, len, caret_cp, &caret_line, &caret_col);
-                    float caret_x = node->x - scroll_x + char_width * (float) caret_col;
-                    float caret_y = node->y + line_height * (float) caret_line;
-                    if (node->w > 0.0f) {
-                        float min_x = node->x;
-                        float max_x = node->x + node->w;
-                        if (caret_x < min_x) caret_x = min_x;
-                        if (caret_x > max_x) caret_x = max_x;
-                    }
-                    float caret_h = (line_count > 1) ? line_height : node->h;
-                    if (caret_h <= 0.0f) caret_h = line_height;
-                    hui_draw caret;
-                    memset(&caret, 0, sizeof(caret));
-                    caret.op = HUI_DRAW_OP_RECT;
-                    caret.u0 = (cs->color & 0x00FFFFFFu) | 0xFF000000u;
-                    caret.u1 = (uint32_t) i;
-                    caret.f[0] = caret_x;
-                    caret.f[1] = caret_y;
-                    caret.f[2] = fmaxf(char_width * 0.1f, 1.0f);
-                    caret.f[3] = caret_h;
-                    hui_vec_push(&list->cmds, caret);
-                }
-            }
-
-            if (has_text) {
-                hui_draw draw;
-                memset(&draw, 0, sizeof(draw));
-                draw.f[5] = -1.0f;
-                draw.op = HUI_DRAW_OP_GLYPH_RUN;
-                draw.u0 = cs->color;
-                draw.u1 = (uint32_t) i;
-                draw.f[0] = node->x;
-                draw.f[1] = node->y;
-                draw.f[2] = node->w;
-                draw.f[3] = node->h;
-                draw.f[4] = cs->font_size;
-                draw.f[5] = scroll_x;
-                hui_vec_push(&list->cmds, draw);
-            }
+    } else {
+        size_t limit = styles->styles.len;
+        if (limit > dom->nodes.len) limit = dom->nodes.len;
+        for (size_t i = 0; i < limit; i++) {
+            if (dom->nodes.data[i].parent != 0xFFFFFFFFu) continue;
+            hui_paint_node(list, dom, styles, (uint32_t) i, viewport_w, viewport_h);
         }
     }
 }

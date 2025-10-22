@@ -62,6 +62,7 @@ uint32_t hui_dom_add_node(hui_dom *dom, hui_node_type type) {
     node.tf_caret = 0;
     node.tf_sel_start = 0;
     node.tf_sel_end = 0;
+    node.attr_selected = 0;
     uint32_t index = (uint32_t) dom->nodes.len;
     hui_vec_push(&dom->nodes, node);
     return index;
@@ -233,6 +234,7 @@ int hui_build_from_html(hui_builder *builder, const char *html, size_t html_len)
                         node->attr_value = token.value_attr.p;
                         node->attr_value_len = (uint32_t) token.value_attr.n;
                     }
+                    node->attr_selected = (uint8_t) (token.selected_attr != 0);
                     if (probe.class_list) {
                         const char *p = probe.class_list;
                         size_t n = probe.class_list_len;

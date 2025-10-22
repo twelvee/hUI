@@ -20,9 +20,23 @@
                 <span class="field-label">Email</span>
                 <input id="email-input" value="{{ email_value }}" placeholder="you@example.com">
             </label>
+            <label class="field">
+                <span class="field-label">Topic</span>
+                <select id="topic-select" value="{{ topic_value }}">
+                    <option value="General">General</option>
+                    <option value="Support">Support</option>
+                    <option value="Feedback">Feedback</option>
+                </select>
+            </label>
+            <label class="field">
+                <span class="field-label">Message</span>
+                <textarea id="message-input" placeholder="Write your message">{{ message_value }}</textarea>
+            </label>
             <div class="summary">
                 <span class="summary-label">Summary:</span>
                 <span class="summary-value">Hi {{ name_value }}, we will reach you at {{ email_value }}.</span>
+                <span class="summary-value">Topic: {{ topic_value }}</span>
+                <span class="summary-value summary-message">{{ message_value }}</span>
             </div>
             <button id="submit-button" type="button">Send</button>
         </form>

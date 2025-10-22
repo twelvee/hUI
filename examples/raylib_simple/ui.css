@@ -37,10 +37,70 @@ main {
     margin-bottom: 6px;
 }
 
-input {
+input,
+textarea,
+select {
+    width: 100%;
     background-color: #1b1b1b;
     color: #ffffff;
     padding: 10px;
+    border: none;
+    font-size: 15px;
+    box-sizing: border-box;
+}
+
+.hui-select {
+    cursor: pointer;
+    background-color: #1b1b1b;
+    border: 1px solid #3a3a3a;
+    border-radius: 4px;
+    padding: 10px;
+    margin-bottom: 16px;
+    color: #ffffff;
+}
+
+.hui-select-display {
+    font-size: 15px;
+}
+
+.hui-select-menu {
+    margin-top: 8px;
+    border: 1px solid #3a3a3a;
+    border-radius: 4px;
+    background-color: #252525;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+
+.hui-select-option {
+    cursor: pointer;
+    background-color: #252525;
+    border-top: 1px solid #3a3a3a;
+    padding: 8px 10px;
+    font-size: 15px;
+    color: #ffffff;
+}
+
+.hui-select-option:first-child {
+    border-top: none;
+}
+
+.hui-select-option-hover {
+    background-color: #2f2f2f;
+}
+
+.hui-select-option-selected {
+    color: #3a7afe;
+    font-weight: 600;
+}
+
+textarea {
+    min-height: 96px;
+    resize: vertical;
+    line-height: 1.4;
+}
+
+select {
+    cursor: pointer;
 }
 
 .summary {
@@ -58,6 +118,11 @@ input {
     display: block;
     margin-top: 4px;
     font-size: 15px;
+}
+
+.summary-value.summary-message {
+    margin-top: 8px;
+    white-space: pre-wrap;
 }
 
 button {

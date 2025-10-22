@@ -40,6 +40,13 @@ static void layout_measure_multiline(const char *text, uint32_t len, size_t *out
 static void layout_node(hui_dom *dom, const hui_style_store *styles, uint32_t idx, float x, float y, float width) {
     hui_dom_node *node = &dom->nodes.data[idx];
     const hui_computed_style *cs = &styles->styles.data[idx];
+    if (cs->display == 0) {
+        node->x = x;
+        node->y = y;
+        node->w = 0.0f;
+        node->h = 0.0f;
+        return;
+    }
     node->x = x;
     node->y = y;
     float inner_width = width - (cs->padding[1] + cs->padding[3]);

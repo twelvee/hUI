@@ -27,6 +27,7 @@ typedef struct {
     hui_slice type_attr;
     hui_slice placeholder_attr;
     hui_slice value_attr;
+    int selected_attr;
 } hui_token;
 
 typedef struct {

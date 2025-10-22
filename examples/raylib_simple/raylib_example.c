@@ -83,6 +83,9 @@ static hui_filter_decision only_ui(const hui_tag_probe *probe, void *user) {
         {HUI_HTML_TAG_DIV, sizeof(HUI_HTML_TAG_DIV) - 1},
         {HUI_HTML_TAG_SPAN, sizeof(HUI_HTML_TAG_SPAN) - 1},
         {HUI_HTML_TAG_INPUT, sizeof(HUI_HTML_TAG_INPUT) - 1},
+        {HUI_HTML_TAG_TEXTAREA, sizeof(HUI_HTML_TAG_TEXTAREA) - 1},
+        {HUI_HTML_TAG_SELECT, sizeof(HUI_HTML_TAG_SELECT) - 1},
+        {HUI_HTML_TAG_OPTION, sizeof(HUI_HTML_TAG_OPTION) - 1},
     };
     for (size_t i = 0; i < sizeof(keep) / sizeof(keep[0]); i++) {
         const hui_html_tag_entry *tag = &keep[i];
@@ -189,7 +192,8 @@ static void process_key_input(hui_ctx *ctx) {
         KEY_LEFT,
         KEY_RIGHT,
         KEY_HOME,
-        KEY_END
+        KEY_END,
+        KEY_ENTER
     };
     for (size_t i = 0; i < sizeof(tracked_keys) / sizeof(tracked_keys[0]); i++) {
         int key = tracked_keys[i];
@@ -200,6 +204,13 @@ static void process_key_input(hui_ctx *ctx) {
             ev.data.key.keycode = (uint32_t) key;
             ev.data.key.modifiers = read_modifiers();
             hui_push_input(ctx, &ev);
+            if (key == KEY_ENTER) {
+                hui_input_event text_ev;
+                memset(&text_ev, 0, sizeof(text_ev));
+                text_ev.type = HUI_INPUT_EVENT_TEXT_INPUT;
+                text_ev.data.text.codepoint = '\n';
+                hui_push_input(ctx, &text_ev);
+            }
         }
         if (IsKeyReleased(key)) {
             hui_input_event ev;
@@ -245,8 +256,10 @@ int main(void) {
 
     hui_set_dom_filter(ctx, only_ui, NULL);
 
-    char name_value[128] = {0};
-    char email_value[128] = {0};
+    char name_value[128] = "Pat";
+    char email_value[128] = "pat@example.com";
+    char topic_value[32] = "General";
+    char message_value[512] = "Hello there!\nI'd love to learn more about hUI.";
     hui_binding name_binding = {
         .type = HUI_BIND_STRING,
         .ptr = name_value,
@@ -257,8 +270,20 @@ int main(void) {
         .ptr = email_value,
         .string_capacity = sizeof(email_value)
     };
+    hui_binding topic_binding = {
+        .type = HUI_BIND_STRING,
+        .ptr = topic_value,
+        .string_capacity = sizeof(topic_value)
+    };
+    hui_binding message_binding = {
+        .type = HUI_BIND_STRING,
+        .ptr = message_value,
+        .string_capacity = sizeof(message_value)
+    };
     hui_bind_variable(ctx, "name_value", &name_binding);
     hui_bind_variable(ctx, "email_value", &email_binding);
+    hui_bind_variable(ctx, "topic_value", &topic_binding);
+    hui_bind_variable(ctx, "message_value", &message_binding);
 
     const hui_clipboard_iface clipboard = {
         .get_text = raylib_clipboard_get,
@@ -277,7 +302,7 @@ int main(void) {
         .move_end = KEY_END,
         .delete_forward = KEY_DELETE
     };
-    hui_set_text_input_defaults(ctx, &clipboard, &keymap, 256);
+    hui_set_text_input_defaults(ctx, &clipboard, &keymap, 512);
     hui_set_text_input_repeat(ctx, 0.4f, 0.05f);
 
     const char *html_path = "examples/raylib_simple/ui.html";

@@ -21,23 +21,29 @@
 typedef struct {
     hui_atom name;
     hui_binding_type type;
+
     union {
         int32_t *i32;
         float *f32;
+
         struct {
             char *ptr;
             size_t capacity;
         } str;
+
         void *ptr;
     } target;
+
     union {
         int32_t i32;
         float f32;
     } cached;
+
     size_t string_cap;
     char *string_value;
     size_t cached_length;
     HUI_VEC(uint32_t) text_nodes;
+
     HUI_VEC(uint32_t) input_nodes;
 } hui_binding_entry;
 
@@ -67,27 +73,82 @@ typedef struct {
 } hui_bound_text_template;
 
 static void hui_auto_text_fields_reset(hui_ctx *ctx);
+
 static int hui_auto_text_fields_rebuild(hui_ctx *ctx);
+
 static uint32_t hui_auto_text_fields_step(hui_ctx *ctx, float dt);
+
+typedef struct {
+    hui_node_handle option;
+    hui_atom value_atom;
+    char *label;
+    size_t label_len;
+} hui_select_option;
+
+typedef struct {
+    hui_node_handle node;
+    hui_node_handle display_node;
+    hui_node_handle display_text;
+    hui_node_handle menu_node;
+    uint32_t binding_index;
+    int selected_index;
+    int open;
+    int hovered_index;
+    HUI_VEC(hui_select_option) options;
+} hui_auto_select_field;
+
+static void hui_auto_select_fields_reset(hui_ctx *ctx);
+
+static int hui_auto_select_fields_rebuild(hui_ctx *ctx);
+
+static uint32_t hui_auto_select_fields_step(hui_ctx *ctx, float dt);
+
+static uint32_t hui_auto_select_apply_selection(hui_ctx *ctx, hui_auto_select_field *field,
+                                                int new_index, int from_binding);
+
 static int hui_node_text_entry_info(hui_ctx *ctx, const hui_dom_node *node, int *out_multiline);
+
 static void hui_binding_prepare_dom(hui_ctx *ctx);
+
 static int hui_binding_find_entry(const hui_ctx *ctx, hui_atom name);
+
 static void hui_binding_relink_entry(hui_ctx *ctx, size_t entry_index);
+
 static uint32_t hui_binding_apply_text_nodes(hui_ctx *ctx, hui_binding_entry *entry);
+
 static uint32_t hui_binding_apply_inputs_from_binding(hui_ctx *ctx, size_t entry_index, int force);
+
 static uint32_t hui_binding_sync_ctx(hui_ctx *ctx);
+
 static hui_atom hui_binding_atom_from_mustache(hui_ctx *ctx, const char *text, size_t len);
+
 static hui_atom hui_binding_atom_from_attr(hui_ctx *ctx, const char *text, size_t len);
+
 static int hui_binding_push_from_string(hui_ctx *ctx, size_t entry_index, const char *text, int *string_applied);
+
 static hui_auto_text_field *hui_find_auto_field(hui_ctx *ctx, uint32_t dom_index);
+
 static void hui_bound_texts_reset(hui_ctx *ctx);
+
 static size_t hui_bound_text_prepare_node(hui_ctx *ctx, uint32_t node_index, hui_dom_node *node);
+
 static uint32_t hui_bound_text_apply_index(hui_ctx *ctx, uint32_t template_index);
+
 static const char *hui_binding_string_for_atom(const hui_ctx *ctx, hui_atom atom, size_t *len);
+
 static void hui_ctx_accumulate_dirty(hui_ctx *ctx, uint32_t flags);
+
 static hui_build_opts hui_normalize_build_opts(const hui_build_opts *opts);
+
 static int hui_render_opts_equal(const hui_ctx *ctx, const hui_build_opts *opts);
+
 static void hui_render_cache_store(hui_ctx *ctx, const hui_build_opts *opts);
+
+static uint32_t hui_hit_test(const hui_ctx *ctx, float x, float y);
+
+static uint32_t hui_hit_test_subtree(const hui_ctx *ctx, uint32_t idx, float x, float y);
+
+static uint32_t hui_hit_test_siblings(const hui_ctx *ctx, uint32_t idx, float x, float y);
 
 struct hui_ctx {
     void * (*alloc_fn)(size_t);
@@ -123,14 +184,24 @@ struct hui_ctx {
     uint32_t key_modifiers;
     hui_node_handle focus_node;
     HUI_VEC(hui_input_event) input_events;
+
     HUI_VEC(uint32_t) text_input;
+
     HUI_VEC(uint32_t) key_pressed;
+
     HUI_VEC(uint32_t) key_released;
+
     HUI_VEC(uint32_t) key_held;
+
     hui_input_state input_state;
     HUI_VEC(hui_binding_entry) bindings;
+
     HUI_VEC(hui_auto_text_field) auto_text_fields;
+
+    HUI_VEC(hui_auto_select_field) auto_select_fields;
+
     HUI_VEC(hui_bound_text_template) bound_texts;
+
     struct {
         hui_clipboard_iface clipboard;
         int clipboard_set;
@@ -141,9 +212,11 @@ struct hui_ctx {
         int delays_set;
         size_t buffer_capacity;
     } text_input_defaults;
+
     uint32_t dirty_flags;
     int draw_valid;
     uint64_t draw_version;
+
     struct {
         float viewport_w;
         float viewport_h;
@@ -151,6 +224,7 @@ struct hui_ctx {
         uint32_t flags;
         int valid;
     } render_cache;
+
     char last_error[256];
 };
 
@@ -166,8 +240,14 @@ static void hui_ctx_accumulate_dirty(hui_ctx *ctx, uint32_t flags) {
     ctx->draw_valid = 0;
 }
 
-static void hui_binding_push_node_unique(HUI_VEC(uint32_t) *vec, uint32_t node_index) {
-    if (!vec) return;
+static void hui_binding_push_node_unique(void *vec_ptr, uint32_t node_index) {
+    if (!vec_ptr) return;
+    struct hui_vec_u32 {
+        uint32_t *data;
+        size_t len;
+        size_t cap;
+    };
+    struct hui_vec_u32 *vec = (struct hui_vec_u32 *) vec_ptr;
     for (size_t i = 0; i < vec->len; i++) {
         if (vec->data[i] == node_index) return;
     }
@@ -374,6 +454,7 @@ hui_ctx *hui_create(void * (*alloc_fn)(size_t), void (*free_fn)(void *)) {
     hui_draw_list_init(&ctx->draw);
     hui_vec_init(&ctx->bindings);
     hui_vec_init(&ctx->auto_text_fields);
+    hui_vec_init(&ctx->auto_select_fields);
     hui_vec_init(&ctx->bound_texts);
     ctx->filter_spec.max_depth = -1;
     ctx->filter_spec.max_nodes = 0;
@@ -381,8 +462,8 @@ hui_ctx *hui_create(void * (*alloc_fn)(size_t), void (*free_fn)(void *)) {
     ctx->filter_spec_enabled = 0;
     ctx->prop_mask = HUI_PROP_ALL;
     ctx->pointer_x = 0.0f;
-   ctx->pointer_y = 0.0f;
-   ctx->pointer_buttons = 0;
+    ctx->pointer_y = 0.0f;
+    ctx->pointer_buttons = 0;
     ctx->pointer_buttons_prev = 0;
     ctx->pointer_pressed = 0;
     ctx->pointer_released = 0;
@@ -650,7 +731,494 @@ static int hui_auto_text_fields_rebuild(hui_ctx *ctx) {
 
 rebuild_fail:
     hui_auto_text_fields_reset(ctx);
+    hui_auto_select_fields_reset(ctx);
     return status;
+}
+
+static void hui_auto_select_option_free(hui_ctx *ctx, hui_select_option *opt) {
+    if (!ctx || !opt) return;
+    if (opt->label) {
+        ctx->free_fn(opt->label);
+        opt->label = NULL;
+    }
+    opt->label_len = 0;
+    opt->option = HUI_NODE_NULL;
+    opt->value_atom = 0;
+}
+
+static void hui_auto_select_fields_reset(hui_ctx *ctx) {
+    if (!ctx) return;
+    for (size_t i = 0; i < ctx->auto_select_fields.len; i++) {
+        hui_auto_select_field *field = &ctx->auto_select_fields.data[i];
+        for (size_t j = 0; j < field->options.len; j++) {
+            hui_auto_select_option_free(ctx, &field->options.data[j]);
+        }
+        hui_vec_free(&field->options);
+        field->selected_index = -1;
+        field->binding_index = 0xFFFFFFFFu;
+        field->node = HUI_NODE_NULL;
+        field->display_node = HUI_NODE_NULL;
+        field->display_text = HUI_NODE_NULL;
+        field->menu_node = HUI_NODE_NULL;
+        field->open = 0;
+        field->hovered_index = -1;
+    }
+    ctx->auto_select_fields.len = 0;
+}
+
+static int hui_auto_select_find_value_index(hui_ctx *ctx, const hui_auto_select_field *field,
+                                            const char *value, size_t len) {
+    if (!ctx || !field || !value) return -1;
+    for (size_t i = 0; i < field->options.len; i++) {
+        const hui_select_option *opt = &field->options.data[i];
+        uint32_t opt_len = 0;
+        const char *opt_str = hui_intern_str(&ctx->atoms, opt->value_atom, &opt_len);
+        if (opt_len == len && (opt_len == 0 || memcmp(opt_str, value, len) == 0))
+            return (int) i;
+    }
+    return -1;
+}
+
+static uint32_t hui_select_apply_visibility(hui_ctx *ctx, hui_auto_select_field *field) {
+    if (!ctx || !field) return 0;
+    size_t styles_len = ctx->styles.styles.len;
+    if (styles_len == 0) return 0;
+    uint32_t dirty = 0;
+    uint32_t desired_menu = field->open ? 1u : 0u;
+    if (!hui_node_is_null(field->menu_node) && field->menu_node.index < styles_len) {
+        hui_computed_style *menu_style = &ctx->styles.styles.data[field->menu_node.index];
+        if (menu_style->display != desired_menu) {
+            menu_style->display = desired_menu;
+            menu_style->present_mask |= HUI_STYLE_PRESENT_DISPLAY;
+            dirty |= HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT;
+        }
+    }
+    return dirty;
+}
+
+static void hui_auto_select_refresh_visibility(hui_ctx *ctx) {
+    if (!ctx) return;
+    for (size_t i = 0; i < ctx->auto_select_fields.len; i++)
+        hui_select_apply_visibility(ctx, &ctx->auto_select_fields.data[i]);
+}
+
+static void hui_select_update_hover(hui_ctx *ctx, hui_auto_select_field *field, int new_hover) {
+    if (!ctx || !field) return;
+    if (field->hovered_index == new_hover) return;
+    if (field->hovered_index >= 0 && (size_t) field->hovered_index < field->options.len) {
+        hui_select_option *opt = &field->options.data[field->hovered_index];
+        hui_dom_remove_class(ctx, opt->option, "hui-select-option-hover");
+    }
+    field->hovered_index = new_hover;
+    if (new_hover >= 0 && (size_t) new_hover < field->options.len) {
+        hui_select_option *opt = &field->options.data[new_hover];
+        hui_dom_add_class(ctx, opt->option, "hui-select-option-hover");
+    }
+}
+
+static void hui_select_mark_selected(hui_ctx *ctx, hui_auto_select_field *field, int index) {
+    for (size_t i = 0; i < field->options.len; i++) {
+        hui_select_option *opt = &field->options.data[i];
+        int selected = (index >= 0 && (int) i == index);
+        if (selected)
+            hui_dom_add_class(ctx, opt->option, "hui-select-option-selected");
+        else
+            hui_dom_remove_class(ctx, opt->option, "hui-select-option-selected");
+        if (!hui_node_is_null(opt->option) && opt->option.index < ctx->dom.nodes.len)
+            ctx->dom.nodes.data[opt->option.index].attr_selected = selected;
+    }
+}
+
+static const char *hui_select_option_value(const hui_ctx *ctx, const hui_select_option *opt, size_t *len_out) {
+    if (!ctx || !opt) {
+        if (len_out) *len_out = 0;
+        return "";
+    }
+    return hui_intern_str(&ctx->atoms, opt->value_atom, (uint32_t *) len_out);
+}
+
+static uint32_t hui_auto_select_apply_selection(hui_ctx *ctx, hui_auto_select_field *field,
+                                                int new_index, int from_binding) {
+    if (!ctx || !field) return 0;
+    if (field->options.len == 0) return 0;
+    if (new_index < 0 || (size_t) new_index >= field->options.len) return 0;
+    if (field->selected_index == new_index && from_binding) return 0;
+
+    hui_select_mark_selected(ctx, field, new_index);
+
+    const hui_select_option *opt = &field->options.data[new_index];
+    const char *label = opt->label ? opt->label : "";
+    if (opt->label_len == 0) {
+        size_t val_len = 0;
+        const char *val = hui_select_option_value(ctx, opt, &val_len);
+        label = val;
+    }
+    if (!hui_node_is_null(field->display_text))
+        hui_dom_set_text(ctx, field->display_text, label);
+
+    field->selected_index = new_index;
+    if (!from_binding && field->binding_index != 0xFFFFFFFFu && field->binding_index < ctx->bindings.len) {
+        size_t val_len = 0;
+        const char *value = hui_select_option_value(ctx, opt, &val_len);
+        int string_applied = 0;
+        if (hui_binding_push_from_string(ctx, field->binding_index, value, &string_applied)) {
+            hui_binding_entry *entry = &ctx->bindings.data[field->binding_index];
+            hui_binding_apply_text_nodes(ctx, entry);
+            hui_binding_apply_inputs_from_binding(ctx, field->binding_index, 0);
+        }
+    }
+    if (!hui_node_is_null(field->node) && field->node.index < ctx->dom.nodes.len) {
+        const hui_select_option *sel = &field->options.data[new_index];
+        size_t val_len = 0;
+        const char *value = hui_select_option_value(ctx, sel, &val_len);
+        hui_dom_node *node = &ctx->dom.nodes.data[field->node.index];
+        node->attr_value = value;
+        node->attr_value_len = (uint32_t) val_len;
+    }
+    hui_mark_dirty(ctx, field->node, HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT);
+    return HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT;
+}
+
+static int hui_auto_select_fields_rebuild(hui_ctx *ctx) {
+    if (!ctx) return HUI_EINVAL;
+    hui_auto_select_fields_reset(ctx);
+    if (ctx->dom.nodes.len == 0) return HUI_OK;
+
+    int status = HUI_OK;
+    hui_atom select_atom = hui_intern_put(&ctx->atoms, "select", strlen("select"));
+    hui_atom option_atom = hui_intern_put(&ctx->atoms, "option", strlen("option"));
+    hui_atom display_class = hui_intern_put(&ctx->atoms, "hui-select-display", strlen("hui-select-display"));
+    hui_atom menu_class = hui_intern_put(&ctx->atoms, "hui-select-menu", strlen("hui-select-menu"));
+
+    for (size_t i = 0; i < ctx->dom.nodes.len; i++) {
+        hui_dom_node *node = &ctx->dom.nodes.data[i];
+        if (node->type != HUI_NODE_ELEM || node->tag != select_atom) continue;
+
+        hui_auto_select_field field;
+        memset(&field, 0, sizeof(field));
+        field.node = (hui_node_handle){(uint32_t) i, node->gen};
+        field.display_node = HUI_NODE_NULL;
+        field.display_text = HUI_NODE_NULL;
+        field.menu_node = HUI_NODE_NULL;
+        field.binding_index = (node->binding_value_index < ctx->bindings.len)
+                                  ? node->binding_value_index
+                                  : 0xFFFFFFFFu;
+        field.selected_index = -1;
+        field.open = 0;
+        field.hovered_index = -1;
+        hui_vec_init(&field.options);
+
+        hui_dom_add_class(ctx, field.node, "hui-select");
+
+        uint32_t child_idx = node->first_child;
+        while (child_idx != 0xFFFFFFFFu) {
+            hui_dom_node *child = &ctx->dom.nodes.data[child_idx];
+            int is_display = 0;
+            if (child->type == HUI_NODE_ELEM) {
+                for (size_t c = 0; c < child->classes.len; c++) {
+                    if (child->classes.data[c] == display_class) {
+                        is_display = 1;
+                        break;
+                    }
+                }
+            }
+            if (is_display) {
+                field.display_node = (hui_node_handle){child_idx, child->gen};
+                break;
+            }
+            child_idx = child->next_sibling;
+        }
+
+        if (hui_node_is_null(field.display_node)) {
+            uint32_t old_first = node->first_child;
+            uint32_t elem_idx = hui_dom_add_node(&ctx->dom, HUI_NODE_ELEM);
+            hui_dom_node *elem = &ctx->dom.nodes.data[elem_idx];
+            elem->tag = hui_intern_put(&ctx->atoms, "div", strlen("div"));
+            elem->parent = (uint32_t) i;
+            elem->next_sibling = old_first;
+            elem->first_child = 0xFFFFFFFFu;
+            hui_vec_push(&elem->classes, display_class);
+            node->first_child = elem_idx;
+            field.display_node = (hui_node_handle){elem_idx, elem->gen};
+        }
+
+        hui_dom_node *display_elem = &ctx->dom.nodes.data[field.display_node.index];
+        if (display_elem->first_child == 0xFFFFFFFFu) {
+            uint32_t text_idx = hui_dom_add_node(&ctx->dom, HUI_NODE_TEXT);
+            hui_dom_node *text = &ctx->dom.nodes.data[text_idx];
+            text->parent = field.display_node.index;
+            text->next_sibling = 0xFFFFFFFFu;
+            text->text = "";
+            text->text_len = 0;
+            display_elem->first_child = text_idx;
+            field.display_text = (hui_node_handle){text_idx, text->gen};
+        } else {
+            hui_dom_node *text = &ctx->dom.nodes.data[display_elem->first_child];
+            if (text->type != HUI_NODE_TEXT) {
+                uint32_t text_idx = hui_dom_add_node(&ctx->dom, HUI_NODE_TEXT);
+                hui_dom_node *tn = &ctx->dom.nodes.data[text_idx];
+                tn->parent = field.display_node.index;
+                tn->next_sibling = display_elem->first_child;
+                tn->text = "";
+                tn->text_len = 0;
+                display_elem->first_child = text_idx;
+                field.display_text = (hui_node_handle){text_idx, tn->gen};
+            } else {
+                field.display_text = (hui_node_handle){display_elem->first_child, text->gen};
+            }
+        }
+
+        uint32_t menu_idx = 0xFFFFFFFFu;
+        child_idx = node->first_child;
+        while (child_idx != 0xFFFFFFFFu) {
+            hui_dom_node *child = &ctx->dom.nodes.data[child_idx];
+            int is_menu = 0;
+            if (child->type == HUI_NODE_ELEM) {
+                for (size_t c = 0; c < child->classes.len; c++) {
+                    if (child->classes.data[c] == menu_class) {
+                        is_menu = 1;
+                        break;
+                    }
+                }
+            }
+            if (is_menu) {
+                menu_idx = child_idx;
+                break;
+            }
+            child_idx = child->next_sibling;
+        }
+
+        if (menu_idx == 0xFFFFFFFFu) {
+            uint32_t elem_idx = hui_dom_add_node(&ctx->dom, HUI_NODE_ELEM);
+            hui_dom_node *menu_elem = &ctx->dom.nodes.data[elem_idx];
+            menu_elem->tag = hui_intern_put(&ctx->atoms, "div", strlen("div"));
+            menu_elem->parent = field.node.index;
+            menu_elem->first_child = 0xFFFFFFFFu;
+            menu_elem->next_sibling = 0xFFFFFFFFu;
+            hui_vec_push(&menu_elem->classes, menu_class);
+
+            hui_dom_node *display_dom = &ctx->dom.nodes.data[field.display_node.index];
+            menu_elem->next_sibling = display_dom->next_sibling;
+            display_dom->next_sibling = elem_idx;
+            menu_idx = elem_idx;
+        }
+
+        field.menu_node = (hui_node_handle){menu_idx, ctx->dom.nodes.data[menu_idx].gen};
+        hui_dom_add_class(ctx, field.menu_node, "hui-select-menu");
+
+        // Reparent option nodes under menu.
+        hui_dom_node *menu_elem = &ctx->dom.nodes.data[menu_idx];
+        uint32_t menu_tail = menu_elem->first_child;
+        if (menu_tail != 0xFFFFFFFFu) {
+            while (ctx->dom.nodes.data[menu_tail].next_sibling != 0xFFFFFFFFu)
+                menu_tail = ctx->dom.nodes.data[menu_tail].next_sibling;
+        }
+
+        uint32_t prev = 0xFFFFFFFFu;
+        uint32_t current = node->first_child;
+        while (current != 0xFFFFFFFFu) {
+            uint32_t next = ctx->dom.nodes.data[current].next_sibling;
+            if (current == field.display_node.index || current == menu_idx) {
+                prev = current;
+                current = next;
+                continue;
+            }
+            hui_dom_node *child = &ctx->dom.nodes.data[current];
+            if (child->type == HUI_NODE_ELEM && child->tag == option_atom) {
+                if (prev == 0xFFFFFFFFu)
+                    node->first_child = next;
+                else
+                    ctx->dom.nodes.data[prev].next_sibling = next;
+                child->parent = menu_idx;
+                child->next_sibling = 0xFFFFFFFFu;
+                if (menu_tail == 0xFFFFFFFFu) {
+                    menu_elem->first_child = current;
+                } else {
+                    ctx->dom.nodes.data[menu_tail].next_sibling = current;
+                }
+                menu_tail = current;
+            } else {
+                prev = current;
+            }
+            current = next;
+        }
+
+        uint32_t opt_idx = menu_elem->first_child;
+        size_t option_counter = 0;
+        while (opt_idx != 0xFFFFFFFFu) {
+            hui_dom_node *child = &ctx->dom.nodes.data[opt_idx];
+            uint32_t next = child->next_sibling;
+            if (child->type == HUI_NODE_ELEM && child->tag == option_atom) {
+                hui_dom_add_class(ctx, (hui_node_handle){opt_idx, child->gen}, "hui-select-option");
+                hui_select_option opt;
+                memset(&opt, 0, sizeof(opt));
+                opt.option = (hui_node_handle){opt_idx, child->gen};
+
+                uint32_t text_child = child->first_child;
+                while (text_child != 0xFFFFFFFFu &&
+                       ctx->dom.nodes.data[text_child].type != HUI_NODE_TEXT) {
+                    text_child = ctx->dom.nodes.data[text_child].next_sibling;
+                }
+                if (text_child == 0xFFFFFFFFu) {
+                    text_child = hui_dom_add_node(&ctx->dom, HUI_NODE_TEXT);
+                    hui_dom_node *tn = &ctx->dom.nodes.data[text_child];
+                    tn->parent = opt_idx;
+                    tn->text = "";
+                    tn->text_len = 0;
+                    tn->next_sibling = child->first_child;
+                    child->first_child = text_child;
+                }
+                hui_dom_node *text_node = &ctx->dom.nodes.data[text_child];
+                const char *src = text_node->text ? text_node->text : "";
+                size_t len = text_node->text_len;
+                size_t start = 0;
+                size_t end = len;
+                while (start < end && isspace((unsigned char) src[start])) start++;
+                while (end > start && isspace((unsigned char) src[end - 1])) end--;
+                size_t trimmed = end - start;
+                const char *label_src = src + start;
+                size_t label_len = trimmed;
+                if (label_len == 0 && child->attr_value && child->attr_value_len > 0) {
+                    label_src = child->attr_value;
+                    label_len = child->attr_value_len;
+                }
+                char *label_copy = (char *) ctx->alloc_fn(label_len + 1);
+                if (!label_copy) {
+                    for (size_t j = 0; j < field.options.len; j++)
+                        hui_auto_select_option_free(ctx, &field.options.data[j]);
+                    hui_vec_free(&field.options);
+                    status = HUI_ENOMEM;
+                    goto rebuild_fail_select;
+                }
+                if (label_len > 0) memcpy(label_copy, label_src, label_len);
+                label_copy[label_len] = '\0';
+                opt.label = label_copy;
+                opt.label_len = label_len;
+
+                if (child->attr_value && child->attr_value_len > 0) {
+                    opt.value_atom = hui_intern_put(&ctx->atoms, child->attr_value, child->attr_value_len);
+                } else if (label_len > 0) {
+                    opt.value_atom = hui_intern_put(&ctx->atoms, label_src, label_len);
+                } else {
+                    opt.value_atom = hui_intern_put(&ctx->atoms, "", 0);
+                }
+
+                if (child->attr_selected)
+                    field.selected_index = (int) option_counter;
+
+                hui_vec_push(&field.options, opt);
+                option_counter++;
+            }
+            opt_idx = next;
+        }
+
+        if (field.options.len == 0) {
+            for (size_t j = 0; j < field.options.len; j++)
+                hui_auto_select_option_free(ctx, &field.options.data[j]);
+            hui_vec_free(&field.options);
+            continue;
+        }
+
+        hui_vec_push(&ctx->auto_select_fields, field);
+        hui_auto_select_field *stored = &ctx->auto_select_fields.data[ctx->auto_select_fields.len - 1];
+
+        int selected_index = stored->selected_index;
+        int binding_matched = 0;
+        if (stored->binding_index != 0xFFFFFFFFu) {
+            hui_binding_entry *entry = &ctx->bindings.data[stored->binding_index];
+            const char *binding_value = entry->string_value ? entry->string_value : "";
+            size_t binding_len = entry->string_value ? entry->cached_length : 0;
+            if (binding_len == 0 && binding_value)
+                binding_len = strlen(binding_value);
+            int idx = hui_auto_select_find_value_index(ctx, stored, binding_value, binding_len);
+            if (idx >= 0) {
+                selected_index = idx;
+                binding_matched = 1;
+            }
+        }
+        if (selected_index < 0 && node->attr_value && node->attr_value_len > 0) {
+            int idx = hui_auto_select_find_value_index(ctx, stored, node->attr_value, node->attr_value_len);
+            if (idx >= 0) selected_index = idx;
+        }
+        if (selected_index < 0) selected_index = 0;
+        if (selected_index >= 0)
+            hui_auto_select_apply_selection(ctx, stored, selected_index, binding_matched);
+        else if (!hui_node_is_null(stored->display_text))
+            hui_dom_set_text(ctx, stored->display_text, "");
+        hui_select_apply_visibility(ctx, stored);
+    }
+
+    return status;
+
+rebuild_fail_select:
+    hui_auto_select_fields_reset(ctx);
+    return status;
+}
+
+static uint32_t hui_auto_select_fields_step(hui_ctx *ctx, float dt) {
+    (void) dt;
+    if (!ctx) return 0;
+    const hui_input_state *state = hui_input_get_state(ctx);
+    if (!state) return 0;
+    float px = state->pointer_x;
+    float py = state->pointer_y;
+    uint32_t hit = hui_hit_test(ctx, px, py);
+    uint32_t dirty = 0;
+    uint32_t pressed = state->pointer_pressed & HUI_POINTER_BUTTON_PRIMARY;
+
+    for (size_t i = 0; i < ctx->auto_select_fields.len; i++) {
+        hui_auto_select_field *field = &ctx->auto_select_fields.data[i];
+        if (field->options.len == 0) continue;
+
+        int hit_option = -1;
+        for (size_t oi = 0; oi < field->options.len; oi++) {
+            if (field->options.data[oi].option.index == hit) {
+                hit_option = (int) oi;
+                break;
+            }
+        }
+
+        if (field->open) {
+            hui_select_update_hover(ctx, field, hit_option);
+            if (pressed) {
+                if (hit_option >= 0) {
+                    dirty |= hui_auto_select_apply_selection(ctx, field, hit_option, 0);
+                    field->open = 0;
+                    hui_dom_remove_class(ctx, field->node, "hui-select-open");
+                    dirty |= hui_select_apply_visibility(ctx, field);
+                    hui_select_update_hover(ctx, field, -1);
+                    hui_mark_dirty(ctx, field->node, HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT);
+                    dirty |= HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT;
+                } else if (hit == field->display_node.index || hit == field->node.index) {
+                    field->open = 0;
+                    hui_dom_remove_class(ctx, field->node, "hui-select-open");
+                    dirty |= hui_select_apply_visibility(ctx, field);
+                    hui_select_update_hover(ctx, field, -1);
+                    hui_mark_dirty(ctx, field->node, HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT);
+                    dirty |= HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT;
+                } else if (!hui_node_is_null(field->menu_node) && hit == field->menu_node.index) {
+                    // click inside menu background, keep open
+                } else {
+                    field->open = 0;
+                    hui_dom_remove_class(ctx, field->node, "hui-select-open");
+                    dirty |= hui_select_apply_visibility(ctx, field);
+                    hui_select_update_hover(ctx, field, -1);
+                    hui_mark_dirty(ctx, field->node, HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT);
+                    dirty |= HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT;
+                }
+            }
+        } else {
+            if (pressed && (hit == field->node.index || hit == field->display_node.index)) {
+                field->open = 1;
+                hui_dom_add_class(ctx, field->node, "hui-select-open");
+                dirty |= hui_select_apply_visibility(ctx, field);
+                hui_input_set_focus(ctx, field->node);
+                hui_mark_dirty(ctx, field->node, HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT);
+                dirty |= HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT;
+            }
+        }
+    }
+    return dirty;
 }
 
 static size_t hui_strnlen(const char *text, size_t max_len) {
@@ -682,6 +1250,16 @@ static hui_auto_text_field *hui_find_auto_field(hui_ctx *ctx, uint32_t dom_index
     for (size_t i = 0; i < ctx->auto_text_fields.len; i++) {
         hui_auto_text_field *field = &ctx->auto_text_fields.data[i];
         if (field->dom_index == dom_index) return field;
+    }
+    return NULL;
+}
+
+static hui_auto_select_field *hui_find_auto_select_field(hui_ctx *ctx, uint32_t dom_index) {
+    if (!ctx) return NULL;
+    for (size_t i = 0; i < ctx->auto_select_fields.len; i++) {
+        hui_auto_select_field *field = &ctx->auto_select_fields.data[i];
+        if (!hui_node_is_null(field->node) && field->node.index == dom_index)
+            return field;
     }
     return NULL;
 }
@@ -772,10 +1350,35 @@ static uint32_t hui_binding_apply_inputs_from_binding(hui_ctx *ctx, size_t entry
     uint32_t dirty = 0;
     for (size_t i = 0; i < entry->input_nodes.len; i++) {
         hui_auto_text_field *field = hui_find_auto_field(ctx, entry->input_nodes.data[i]);
-        if (!field) continue;
-        field->binding_index = (uint32_t) entry_index;
-        if (!force && field->field.focused) continue;
-        dirty |= hui_text_field_set_text(ctx, &field->field, entry->string_value);
+        if (field) {
+            field->binding_index = (uint32_t) entry_index;
+            if (!force && field->field.focused) continue;
+            dirty |= hui_text_field_set_text(ctx, &field->field, entry->string_value);
+            continue;
+        }
+        hui_auto_select_field *select_field = hui_find_auto_select_field(ctx, entry->input_nodes.data[i]);
+        if (!select_field) continue;
+        select_field->binding_index = (uint32_t) entry_index;
+        size_t binding_len = entry->cached_length;
+        if (binding_len == 0 && entry->string_value)
+            binding_len = strlen(entry->string_value);
+        int idx = hui_auto_select_find_value_index(ctx, select_field, entry->string_value, binding_len);
+        if (idx >= 0)
+            dirty |= hui_auto_select_apply_selection(ctx, select_field, idx, 1);
+        else {
+            hui_select_mark_selected(ctx, select_field, -1);
+            select_field->selected_index = -1;
+            if (!hui_node_is_null(select_field->display_text))
+                hui_dom_set_text(ctx, select_field->display_text, entry->string_value ? entry->string_value : "");
+            if (!hui_node_is_null(select_field->node) && select_field->node.index < ctx->dom.nodes.len) {
+                hui_dom_node *sel_node = &ctx->dom.nodes.data[select_field->node.index];
+                sel_node->attr_value = entry->string_value ? entry->string_value : "";
+                sel_node->attr_value_len = (uint32_t) binding_len;
+            }
+            hui_mark_dirty(ctx, select_field->node, HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT);
+            dirty |= HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT;
+        }
+        dirty |= hui_select_apply_visibility(ctx, select_field);
     }
     return dirty;
 }
@@ -788,7 +1391,8 @@ static hui_atom hui_binding_atom_from_mustache(hui_ctx *ctx, const char *text, s
     while (end > start && isspace((unsigned char) text[end - 1])) end--;
     if (end - start < 4) return 0;
     if (!(text[start] == '{' && text[start + 1] == '{' &&
-          text[end - 2] == '}' && text[end - 1] == '}')) return 0;
+          text[end - 2] == '}' && text[end - 1] == '}'))
+        return 0;
     start += 2;
     end -= 2;
     while (start < end && isspace((unsigned char) text[start])) start++;
@@ -870,6 +1474,23 @@ static void hui_binding_prepare_dom(hui_ctx *ctx) {
             if (node->attr_value && node->attr_value_len > 0) {
                 hui_atom atom = hui_binding_atom_from_attr(ctx, node->attr_value, node->attr_value_len);
                 if (atom) node->binding_value_atom = atom;
+            }
+            if (node->binding_value_atom == 0) {
+                int text_entry = hui_node_text_entry_info(ctx, node, NULL);
+                if (text_entry) {
+                    uint32_t child_idx = node->first_child;
+                    while (child_idx != 0xFFFFFFFFu) {
+                        hui_dom_node *child = &ctx->dom.nodes.data[child_idx];
+                        if (child->type == HUI_NODE_TEXT && child->binding_text_atom != 0) {
+                            node->binding_value_atom = child->binding_text_atom;
+                            child->binding_text_atom = 0;
+                            child->binding_text_index = 0xFFFFFFFFu;
+                            child->binding_template_index = 0xFFFFFFFFu;
+                            break;
+                        }
+                        child_idx = child->next_sibling;
+                    }
+                }
             }
         }
     }
@@ -966,6 +1587,34 @@ static uint32_t hui_binding_sync_ctx(hui_ctx *ctx) {
             }
         }
     }
+    for (size_t i = 0; i < ctx->auto_select_fields.len; i++) {
+        hui_auto_select_field *field = &ctx->auto_select_fields.data[i];
+        if (field->binding_index == 0xFFFFFFFFu || field->binding_index >= ctx->bindings.len)
+            continue;
+        hui_binding_entry *entry = &ctx->bindings.data[field->binding_index];
+        if (!entry->string_value) continue;
+        const char *binding_value = entry->string_value;
+        size_t binding_len = entry->cached_length;
+        if (binding_len == 0 && binding_value)
+            binding_len = strlen(binding_value);
+        int idx = hui_auto_select_find_value_index(ctx, field, binding_value, binding_len);
+        if (idx >= 0 && idx != field->selected_index) {
+            dirty |= hui_auto_select_apply_selection(ctx, field, idx, 1);
+        } else if (idx < 0) {
+            hui_select_mark_selected(ctx, field, -1);
+            field->selected_index = -1;
+            if (!hui_node_is_null(field->display_text))
+                hui_dom_set_text(ctx, field->display_text, binding_value);
+            if (!hui_node_is_null(field->node) && field->node.index < ctx->dom.nodes.len) {
+                hui_dom_node *sel_node = &ctx->dom.nodes.data[field->node.index];
+                sel_node->attr_value = binding_value;
+                sel_node->attr_value_len = (uint32_t) binding_len;
+            }
+            hui_mark_dirty(ctx, field->node, HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT);
+            dirty |= HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT;
+        }
+        dirty |= hui_select_apply_visibility(ctx, field);
+    }
     return dirty;
 }
 
@@ -1004,7 +1653,9 @@ void hui_destroy(hui_ctx *ctx) {
     hui_vec_free(&ctx->key_released);
     hui_vec_free(&ctx->key_held);
     hui_auto_text_fields_reset(ctx);
+    hui_auto_select_fields_reset(ctx);
     hui_vec_free(&ctx->auto_text_fields);
+    hui_vec_free(&ctx->auto_select_fields);
     for (size_t i = 0; i < ctx->bindings.len; i++) {
         hui_binding_entry *entry = &ctx->bindings.data[i];
         hui_vec_free(&entry->text_nodes);
@@ -1105,6 +1756,8 @@ int hui_parse(hui_ctx *ctx) {
     }
     int auto_r = hui_auto_text_fields_rebuild(ctx);
     if (auto_r != HUI_OK) return auto_r;
+    auto_r = hui_auto_select_fields_rebuild(ctx);
+    if (auto_r != HUI_OK) return auto_r;
     for (size_t bi = 0; bi < ctx->bindings.len; bi++) {
         uint32_t input_dirty = hui_binding_apply_inputs_from_binding(ctx, bi, 1);
         hui_ctx_accumulate_dirty(ctx, input_dirty);
@@ -1118,6 +1771,7 @@ int hui_style(hui_ctx *ctx) {
     hui_style_store_reset(&ctx->styles);
     hui_style_store_init(&ctx->styles);
     hui_apply_styles(&ctx->styles, &ctx->dom, &ctx->atoms, &ctx->stylesheet, ctx->prop_mask);
+    hui_auto_select_refresh_visibility(ctx);
     return HUI_OK;
 }
 
@@ -1208,23 +1862,51 @@ render_end:
     return status;
 }
 
-static uint32_t hui_hit_test(const hui_ctx *ctx, float x, float y) {
+static uint32_t hui_hit_test_siblings(const hui_ctx *ctx, uint32_t idx, float x, float y) {
     if (!ctx) return 0xFFFFFFFFu;
-    const hui_dom *dom = &ctx->dom;
-    const hui_style_store *styles = &ctx->styles;
-    if (dom->nodes.len == 0) return 0xFFFFFFFFu;
-    if (styles->styles.len < dom->nodes.len) return 0xFFFFFFFFu;
-    for (size_t idx = dom->nodes.len; idx-- > 0;) {
-        const hui_dom_node *node = &dom->nodes.data[idx];
-        if (node->type != HUI_NODE_ELEM) continue;
-        const hui_computed_style *cs = &styles->styles.data[idx];
-        if (cs->display == 0) continue;
+    if (idx == 0xFFFFFFFFu) return 0xFFFFFFFFu;
+    if (idx >= ctx->dom.nodes.len) return 0xFFFFFFFFu;
+    const hui_dom_node *node = &ctx->dom.nodes.data[idx];
+    uint32_t hit = hui_hit_test_siblings(ctx, node->next_sibling, x, y);
+    if (hit != 0xFFFFFFFFu) return hit;
+    return hui_hit_test_subtree(ctx, idx, x, y);
+}
+
+static uint32_t hui_hit_test_subtree(const hui_ctx *ctx, uint32_t idx, float x, float y) {
+    if (!ctx) return 0xFFFFFFFFu;
+    if (idx >= ctx->dom.nodes.len) return 0xFFFFFFFFu;
+    const hui_dom_node *node = &ctx->dom.nodes.data[idx];
+    const hui_computed_style *cs = (idx < ctx->styles.styles.len)
+                                       ? &ctx->styles.styles.data[idx]
+                                       : NULL;
+    if (node->type == HUI_NODE_ELEM) {
+        if (cs && cs->display == 0) return 0xFFFFFFFFu;
+        uint32_t child = node->first_child;
+        if (child != 0xFFFFFFFFu) {
+            uint32_t hit = hui_hit_test_siblings(ctx, child, x, y);
+            if (hit != 0xFFFFFFFFu) return hit;
+        }
         float left = node->x;
         float top = node->y;
         float right = left + node->w;
         float bottom = top + node->h;
+        if (node->w <= 0.0f && node->h <= 0.0f) return 0xFFFFFFFFu;
         if (x >= left && x <= right && y >= top && y <= bottom)
-            return (uint32_t) idx;
+            return idx;
+    }
+    return 0xFFFFFFFFu;
+}
+
+static uint32_t hui_hit_test(const hui_ctx *ctx, float x, float y) {
+    if (!ctx) return 0xFFFFFFFFu;
+    if (ctx->dom.nodes.len == 0) return 0xFFFFFFFFu;
+    if (ctx->dom.root != 0xFFFFFFFFu)
+        return hui_hit_test_siblings(ctx, ctx->dom.root, x, y);
+    for (size_t idx = ctx->dom.nodes.len; idx-- > 0;) {
+        const hui_dom_node *node = &ctx->dom.nodes.data[idx];
+        if (node->parent != 0xFFFFFFFFu) continue;
+        uint32_t hit = hui_hit_test_subtree(ctx, (uint32_t) idx, x, y);
+        if (hit != 0xFFFFFFFFu) return hit;
     }
     return 0xFFFFFFFFu;
 }
@@ -1369,6 +2051,7 @@ uint32_t hui_step(hui_ctx *ctx, float dt) {
     if (!ctx) return 0u;
     uint32_t dirty = hui_process_input(ctx);
     dirty |= hui_auto_text_fields_step(ctx, dt);
+    dirty |= hui_auto_select_fields_step(ctx, dt);
     dirty |= hui_binding_sync_ctx(ctx);
     hui_ctx_accumulate_dirty(ctx, dirty);
     return dirty;
@@ -1390,7 +2073,7 @@ int hui_bind_variable(hui_ctx *ctx, const char *name, const hui_binding *binding
         hui_vec_init(&fresh.text_nodes);
         hui_vec_init(&fresh.input_nodes);
         hui_vec_push(&ctx->bindings, fresh);
-        idx = (int)(ctx->bindings.len - 1);
+        idx = (int) (ctx->bindings.len - 1);
         entry = &ctx->bindings.data[idx];
     }
 

@@ -29,6 +29,7 @@ static void reset_token(hui_token *tk, hui_token_kind kind) {
     tk->type_attr.p = tk->placeholder_attr.p = tk->value_attr.p = NULL;
     tk->text.n = tk->tag.n = tk->id.n = tk->class_attr.n = 0;
     tk->type_attr.n = tk->placeholder_attr.n = tk->value_attr.n = 0;
+    tk->selected_attr = 0;
 }
 
 int hui_html_next(hui_html_lexer *lexer, hui_token *out) {
@@ -94,6 +95,7 @@ int hui_html_next(hui_html_lexer *lexer, hui_token *out) {
     hui_slice type_attr = {0};
     hui_slice placeholder_attr = {0};
     hui_slice value_attr = {0};
+    int selected_attr = 0;
 
     while (i < n) {
         skip_ws(s, n, &i);
@@ -108,6 +110,7 @@ int hui_html_next(hui_html_lexer *lexer, hui_token *out) {
             out->type_attr = type_attr;
             out->placeholder_attr = placeholder_attr;
             out->value_attr = value_attr;
+            out->selected_attr = selected_attr;
             lexer->pos = i;
             return 1;
         }
@@ -121,6 +124,7 @@ int hui_html_next(hui_html_lexer *lexer, hui_token *out) {
             out->type_attr = type_attr;
             out->placeholder_attr = placeholder_attr;
             out->value_attr = value_attr;
+            out->selected_attr = selected_attr;
             lexer->pos = i;
             return 1;
         }
@@ -153,6 +157,7 @@ int hui_html_next(hui_html_lexer *lexer, hui_token *out) {
         else if (slice_eq(name, "type")) type_attr = value;
         else if (slice_eq(name, "placeholder")) placeholder_attr = value;
         else if (slice_eq(name, "value")) value_attr = value;
+        else if (slice_eq(name, "selected")) selected_attr = 1;
     }
 
     reset_token(out, HUI_TK_ERR);
