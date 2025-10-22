@@ -583,11 +583,6 @@ static int hui_auto_text_fields_rebuild(hui_ctx *ctx) {
     return HUI_OK;
 }
 
-static size_t hui_binding_string_length(const hui_binding_entry *entry) {
-    if (!entry || !entry->string_value) return 0;
-    return strlen(entry->string_value);
-}
-
 static size_t hui_strnlen(const char *text, size_t max_len) {
     if (!text) return 0;
     size_t len = 0;
@@ -679,7 +674,7 @@ static int hui_binding_pull_pointer(hui_binding_entry *entry) {
 static uint32_t hui_binding_apply_text_nodes(hui_ctx *ctx, hui_binding_entry *entry) {
     if (!ctx || !entry) return 0;
     uint32_t dirty = 0;
-    uint32_t length = entry->string_value ? (uint32_t) hui_binding_string_length(entry) : 0;
+    uint32_t length = entry->string_value ? (uint32_t) entry->cached_length : 0;
     for (size_t i = 0; i < entry->text_nodes.len; i++) {
         uint32_t idx = entry->text_nodes.data[i];
         if (idx >= ctx->dom.nodes.len) continue;
