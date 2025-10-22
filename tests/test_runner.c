@@ -45,6 +45,22 @@ static void test_clipboard_set(void *user, const char *text) {
     clip->buffer[len] = '\0';
 }
 
+static int draw_contains_text(hui_ctx *ctx, const char *expected) {
+    if (!ctx || !expected) return 0;
+    size_t expected_len = strlen(expected);
+    if (expected_len == 0) return 0;
+    hui_draw_list_view view = hui_get_draw_list(ctx);
+    for (size_t i = 0; i < view.count; i++) {
+        const hui_draw *cmd = &view.items[i];
+        if (cmd->op != HUI_DRAW_OP_GLYPH_RUN) continue;
+        size_t len = 0;
+        const char *text = hui_draw_text_utf8(ctx, cmd, &len);
+        if (!text || len != expected_len) continue;
+        if (strncmp(text, expected, len) == 0) return 1;
+    }
+    return 0;
+}
+
 typedef void (*test_fn)(void);
 
 typedef struct {
@@ -911,6 +927,112 @@ static void test_textarea_multiline(void) {
     hui_destroy(ctx);
 }
 
+static void test_textarea_placeholder_binding(void) {
+    hui_ctx *ctx = hui_create(NULL, NULL);
+    ASSERT(ctx != NULL);
+
+    char note_storage[64] = {0};
+    hui_binding note_binding = {
+        .type = HUI_BIND_STRING,
+        .ptr = note_storage,
+        .string_capacity = sizeof(note_storage)
+    };
+    ASSERT(hui_bind_variable(ctx, "note_text", &note_binding) == HUI_OK);
+
+    test_clipboard clip;
+    memset(&clip, 0, sizeof(clip));
+    hui_clipboard_iface clipboard = {
+        .get_text = test_clipboard_get,
+        .set_text = test_clipboard_set,
+        .user = &clip
+    };
+    hui_text_field_keymap keymap = {
+        .backspace = 8,
+        .select_all = 'A',
+        .copy = 'C',
+        .paste = 'V',
+        .cut = TEST_KEY_CUT,
+        .move_left = TEST_KEY_LEFT,
+        .move_right = TEST_KEY_RIGHT,
+        .move_up = TEST_KEY_UP,
+        .move_down = TEST_KEY_DOWN,
+        .move_home = TEST_KEY_HOME,
+        .move_end = TEST_KEY_END,
+        .delete_forward = TEST_KEY_DELETE
+    };
+    hui_set_text_input_defaults(ctx, &clipboard, &keymap, sizeof(note_storage));
+
+    const char *html = "<!doctype html><html><body>"
+                       "<textarea id='note' placeholder='Hint' value='{{ note_text }}'></textarea>"
+                       "</body></html>";
+    const char *css = "textarea { width: 160px; height: 80px; padding: 6px; border: 1px solid #202020; }";
+    ASSERT(hui_feed_html(ctx, (hui_bytes){(const uint8_t *) html, strlen(html)}, 1) == HUI_OK);
+    ASSERT(hui_feed_css(ctx, (hui_bytes){(const uint8_t *) css, strlen(css)}, 1) == HUI_OK);
+    ASSERT(hui_parse(ctx) == HUI_OK);
+
+    hui_build_opts opts = {240.0f, 180.0f, 96.0f, 0};
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    hui_node_handle textarea = hui_dom_query_id(ctx, "note");
+    ASSERT(!hui_node_is_null(textarea));
+    ASSERT(draw_contains_text(ctx, "Hint"));
+
+    hui_rect rect;
+    ASSERT(hui_node_get_layout(ctx, textarea, &rect) == HUI_OK);
+    float cx = rect.x + rect.w * 0.5f;
+    float cy = rect.y + rect.h * 0.5f;
+
+    hui_input_event move = {0};
+    move.type = HUI_INPUT_EVENT_POINTER_MOVE;
+    move.data.pointer_move.x = cx;
+    move.data.pointer_move.y = cy;
+    ASSERT(hui_push_input(ctx, &move) == HUI_OK);
+
+    hui_input_event press = {0};
+    press.type = HUI_INPUT_EVENT_POINTER_BUTTON;
+    press.data.pointer_button.x = cx;
+    press.data.pointer_button.y = cy;
+    press.data.pointer_button.buttons = HUI_POINTER_BUTTON_PRIMARY;
+    ASSERT(hui_push_input(ctx, &press) == HUI_OK);
+
+    hui_input_event release = {0};
+    release.type = HUI_INPUT_EVENT_POINTER_BUTTON;
+    release.data.pointer_button.x = cx;
+    release.data.pointer_button.y = cy;
+    release.data.pointer_button.buttons = 0;
+    ASSERT(hui_push_input(ctx, &release) == HUI_OK);
+
+    ASSERT(hui_step(ctx, 0.016f) != 0);
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    ASSERT(!draw_contains_text(ctx, "Hint"));
+
+    hui_input_event text_ev = {0};
+    text_ev.type = HUI_INPUT_EVENT_TEXT_INPUT;
+    text_ev.data.text.codepoint = 'O';
+    ASSERT(hui_push_input(ctx, &text_ev) == HUI_OK);
+    text_ev.data.text.codepoint = 'k';
+    ASSERT(hui_push_input(ctx, &text_ev) == HUI_OK);
+    text_ev.data.text.codepoint = '\n';
+    ASSERT(hui_push_input(ctx, &text_ev) == HUI_OK);
+
+    ASSERT(hui_step(ctx, 0.016f) != 0);
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    ASSERT(strcmp(note_storage, "Ok\n") == 0);
+
+    ASSERT(hui_input_set_focus(ctx, HUI_NODE_NULL) == HUI_OK);
+    hui_step(ctx, 0.016f);
+
+    note_storage[0] = '\0';
+    ASSERT(hui_step(ctx, 0.016f) != 0);
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    ASSERT(draw_contains_text(ctx, "Hint"));
+
+    hui_destroy(ctx);
+}
+
 static void test_text_field_scroll(void) {
     const char *html = "<!doctype html><html><body>"
                        "<div id='scroll-input' class='input'><span id='scroll-value'></span></div>"
@@ -961,6 +1083,136 @@ static void test_text_field_scroll(void) {
         }
     }
     ASSERT(glyph_found);
+
+    hui_destroy(ctx);
+}
+
+static void test_select_interaction(void) {
+    hui_ctx *ctx = hui_create(NULL, NULL);
+    ASSERT(ctx != NULL);
+
+    char topic_storage[32] = "support";
+    hui_binding topic_binding = {
+        .type = HUI_BIND_STRING,
+        .ptr = topic_storage,
+        .string_capacity = sizeof(topic_storage)
+    };
+    ASSERT(hui_bind_variable(ctx, "topic", &topic_binding) == HUI_OK);
+
+    const char *html = "<!doctype html><html><body>"
+                       "<select id='topic' value='{{ topic }}'>"
+                       "<option value='general'>General</option>"
+                       "<option value='support'>Support</option>"
+                       "<option value='feedback'>Feedback</option>"
+                       "</select>"
+                       "</body></html>";
+    const char *css = ".hui-select { width: 160px; padding: 6px; border: 1px solid #202020; }"
+                      ".hui-select-menu { background: #ffffff; border: 1px solid #505050; }";
+    ASSERT(hui_feed_html(ctx, (hui_bytes){(const uint8_t *) html, strlen(html)}, 1) == HUI_OK);
+    ASSERT(hui_feed_css(ctx, (hui_bytes){(const uint8_t *) css, strlen(css)}, 1) == HUI_OK);
+    ASSERT(hui_parse(ctx) == HUI_OK);
+
+    hui_build_opts opts = {260.0f, 200.0f, 96.0f, 0};
+   ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+   hui_node_handle select = hui_dom_query_id(ctx, "topic");
+   ASSERT(!hui_node_is_null(select));
+    ASSERT(draw_contains_text(ctx, "Support"));
+    ASSERT(strcmp(topic_storage, "support") == 0);
+
+    hui_node_handle display = HUI_NODE_NULL;
+    hui_node_handle menu = HUI_NODE_NULL;
+    hui_node_handle child = hui_node_first_child(ctx, select);
+    while (!hui_node_is_null(child)) {
+        if (hui_node_is_element(ctx, child)) {
+            if (hui_node_is_null(display))
+                display = child;
+            else {
+                menu = child;
+                break;
+            }
+        }
+        child = hui_node_next_sibling(ctx, child);
+    }
+    ASSERT(!hui_node_is_null(display));
+    ASSERT(!hui_node_is_null(menu));
+
+    hui_rect display_rect;
+    ASSERT(hui_node_get_layout(ctx, display, &display_rect) == HUI_OK);
+    float dx = display_rect.x + display_rect.w * 0.5f;
+    float dy = display_rect.y + display_rect.h * 0.5f;
+
+    hui_input_event move = {0};
+    move.type = HUI_INPUT_EVENT_POINTER_MOVE;
+    move.data.pointer_move.x = dx;
+    move.data.pointer_move.y = dy;
+    ASSERT(hui_push_input(ctx, &move) == HUI_OK);
+
+    hui_input_event press = {0};
+    press.type = HUI_INPUT_EVENT_POINTER_BUTTON;
+    press.data.pointer_button.x = dx;
+    press.data.pointer_button.y = dy;
+    press.data.pointer_button.buttons = HUI_POINTER_BUTTON_PRIMARY;
+    ASSERT(hui_push_input(ctx, &press) == HUI_OK);
+
+    hui_input_event release = {0};
+    release.type = HUI_INPUT_EVENT_POINTER_BUTTON;
+    release.data.pointer_button.x = dx;
+    release.data.pointer_button.y = dy;
+    release.data.pointer_button.buttons = 0;
+    ASSERT(hui_push_input(ctx, &release) == HUI_OK);
+
+    ASSERT(hui_step(ctx, 0.016f) != 0);
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    hui_node_handle options[4];
+    size_t option_count = 0;
+    hui_node_handle option = hui_node_first_child(ctx, menu);
+    while (!hui_node_is_null(option) && option_count < 4) {
+        if (hui_node_is_element(ctx, option)) {
+            options[option_count++] = option;
+        }
+        option = hui_node_next_sibling(ctx, option);
+    }
+    ASSERT(option_count >= 3);
+
+    hui_rect option_rect;
+    ASSERT(hui_node_get_layout(ctx, options[2], &option_rect) == HUI_OK);
+    float ox = option_rect.x + option_rect.w * 0.5f;
+    float oy = option_rect.y + option_rect.h * 0.5f;
+
+    hui_input_event move_option = {0};
+    move_option.type = HUI_INPUT_EVENT_POINTER_MOVE;
+    move_option.data.pointer_move.x = ox;
+    move_option.data.pointer_move.y = oy;
+    ASSERT(hui_push_input(ctx, &move_option) == HUI_OK);
+
+    hui_input_event press_option = {0};
+    press_option.type = HUI_INPUT_EVENT_POINTER_BUTTON;
+    press_option.data.pointer_button.x = ox;
+    press_option.data.pointer_button.y = oy;
+    press_option.data.pointer_button.buttons = HUI_POINTER_BUTTON_PRIMARY;
+    ASSERT(hui_push_input(ctx, &press_option) == HUI_OK);
+
+    hui_input_event release_option = {0};
+    release_option.type = HUI_INPUT_EVENT_POINTER_BUTTON;
+    release_option.data.pointer_button.x = ox;
+    release_option.data.pointer_button.y = oy;
+    release_option.data.pointer_button.buttons = 0;
+    ASSERT(hui_push_input(ctx, &release_option) == HUI_OK);
+
+    ASSERT(hui_step(ctx, 0.016f) != 0);
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    ASSERT(draw_contains_text(ctx, "Feedback"));
+    ASSERT(strcmp(topic_storage, "feedback") == 0);
+
+    strcpy(topic_storage, "general");
+    ASSERT(hui_step(ctx, 0.016f) != 0);
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    ASSERT(draw_contains_text(ctx, "General"));
+    ASSERT(strcmp(topic_storage, "general") == 0);
 
     hui_destroy(ctx);
 }
@@ -1194,6 +1446,8 @@ static const test_case tests[] = {
     {"text_binding_render", test_text_binding_render},
     {"auto_text_input", test_auto_text_input},
     {"input_dirty_flags", test_input_dirty_flags},
+    {"textarea_placeholder_binding", test_textarea_placeholder_binding},
+    {"select_interaction", test_select_interaction},
     {"ctx_pipeline", test_ctx_pipeline}
 };
 
