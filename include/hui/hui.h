@@ -274,6 +274,10 @@ int hui_restyle_and_relayout(hui_ctx *ctx, const hui_build_opts *opts);
 
 int hui_node_get_layout(hui_ctx *ctx, hui_node_handle h, hui_rect *out);
 
+float hui_node_font_size(hui_ctx *ctx, hui_node_handle h);
+
+float hui_node_line_height(hui_ctx *ctx, hui_node_handle h);
+
 const char *hui_last_error(hui_ctx *ctx);
 
 typedef struct {

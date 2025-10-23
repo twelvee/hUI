@@ -72,6 +72,8 @@ static size_t hui_text_field_selection_end(const hui_text_field *field) {
     return field->caret < field->sel_anchor ? field->sel_anchor : field->caret;
 }
 
+static float hui_text_field_font_size(hui_ctx *ctx, const hui_text_field *field);
+
 static int hui_text_field_has_selection(const hui_text_field *field) {
     return field && hui_text_field_selection_end(field) > hui_text_field_selection_start(field);
 }
@@ -237,8 +239,7 @@ static uint32_t hui_text_field_move_vertical(hui_ctx *ctx, hui_text_field *field
 }
 
 static size_t hui_text_field_caret_from_point(hui_ctx *ctx, hui_text_field *field, float px, float py) {
-    (void) ctx;
-    if (!field) return 0;
+    if (!ctx || !field) return 0;
     if (field->placeholder_visible) return 0;
     hui_rect rect = (hui_rect){0, 0, 0, 0};
     if (hui_node_get_layout(ctx, field->text, &rect) != HUI_OK) {
@@ -250,7 +251,7 @@ static size_t hui_text_field_caret_from_point(hui_ctx *ctx, hui_text_field *fiel
     size_t cp_total = hui_utf8_count_total(text, len);
     if (!field->multiline) {
         float width = rect.w;
-        float font_size = rect.h > 0.0f ? rect.h / HUI_TEXT_APPROX_LINE_HEIGHT : 16.0f;
+        float font_size = hui_text_field_font_size(ctx, field);
         if (font_size <= 0.0f) font_size = 16.0f;
         float char_width = font_size * HUI_TEXT_APPROX_CHAR_ADVANCE;
         if (char_width <= 0.1f) char_width = 1.0f;
@@ -268,10 +269,11 @@ static size_t hui_text_field_caret_from_point(hui_ctx *ctx, hui_text_field *fiel
 
     size_t line_count = hui_text_field_count_lines(text, len);
     if (line_count == 0) line_count = 1;
-    float total_height = rect.h;
-    float line_height = (total_height > 0.0f) ? (total_height / (float) line_count) : 0.0f;
-    float font_size = (line_height > 0.0f) ? (line_height / HUI_TEXT_APPROX_LINE_HEIGHT) : 16.0f;
+    float font_size = hui_text_field_font_size(ctx, field);
     if (font_size <= 0.0f) font_size = 16.0f;
+    float line_height = hui_node_line_height(ctx, field->text);
+    if (line_height <= 0.0f) line_height = hui_node_line_height(ctx, field->value);
+    if (line_height <= 0.0f) line_height = hui_node_line_height(ctx, field->container);
     if (line_height <= 0.0f) line_height = font_size * HUI_TEXT_APPROX_LINE_HEIGHT;
     float char_width = font_size * HUI_TEXT_APPROX_CHAR_ADVANCE;
     if (char_width <= 0.1f) char_width = 1.0f;
@@ -298,28 +300,12 @@ static size_t hui_text_field_caret_from_point(hui_ctx *ctx, hui_text_field *fiel
 }
 static float hui_text_field_font_size(hui_ctx *ctx, const hui_text_field *field) {
     if (!ctx || !field) return 16.0f;
-    hui_rect rect;
-    if (!hui_node_is_null(field->text) &&
-        hui_node_get_layout(ctx, field->text, &rect) == HUI_OK) {
-        if (rect.h > 0.0f) {
-            float fs = rect.h / HUI_TEXT_APPROX_LINE_HEIGHT;
-            if (fs > 0.0f) return fs;
-        }
-    }
-    if (!hui_node_is_null(field->value) &&
-        hui_node_get_layout(ctx, field->value, &rect) == HUI_OK) {
-        if (rect.h > 0.0f) {
-            float fs = rect.h / HUI_TEXT_APPROX_LINE_HEIGHT;
-            if (fs > 0.0f) return fs;
-        }
-    }
-    if (!hui_node_is_null(field->container) &&
-        hui_node_get_layout(ctx, field->container, &rect) == HUI_OK) {
-        if (rect.h > 0.0f) {
-            float fs = rect.h / HUI_TEXT_APPROX_LINE_HEIGHT;
-            if (fs > 0.0f) return fs;
-        }
-    }
+    float fs = hui_node_font_size(ctx, field->text);
+    if (fs > 0.0f) return fs;
+    fs = hui_node_font_size(ctx, field->value);
+    if (fs > 0.0f) return fs;
+    fs = hui_node_font_size(ctx, field->container);
+    if (fs > 0.0f) return fs;
     return 16.0f;
 }
 

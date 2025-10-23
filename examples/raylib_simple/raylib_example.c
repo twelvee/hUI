@@ -43,7 +43,6 @@ static Font example_get_font(hui_ctx *ctx, const hui_draw *cmd) {
         TraceLog(LOG_WARNING, "Failed to load font '%s', using default", res->family ? res->family : "(unknown)");
         return GetFontDefault();
     }
-    TraceLog(LOG_INFO, "Loaded font '%s' (%u glyphs texture %dx%d)", res->family ? res->family : "(unknown)", font.glyphCount, font.texture.width, font.texture.height);
     SetTextureFilter(font.texture, TEXTURE_FILTER_BILINEAR);
     g_loaded_fonts[g_loaded_font_count].resource = res;
     g_loaded_fonts[g_loaded_font_count].font = font;
@@ -80,12 +79,6 @@ static void draw_text_utf8(hui_ctx *ctx, const hui_draw *cmd) {
     Font font = example_get_font(ctx, cmd);
     if (font.texture.id == 0) {
         TraceLog(LOG_WARNING, "Using default font fallback for draw cmd");
-    }
-    static int debug_count = 0;
-    if (debug_count < 4) {
-        debug_count++;
-        TraceLog(LOG_INFO, "draw run fontId=%u size=%.1f texture=%d text=\"%.*s\"", cmd->u2, font_size, font.texture.id,
-                 (int) ((text_len < 12) ? text_len : 12), text);
     }
     float draw_x = cmd->f[0] - (scroll_x >= 0.0f ? scroll_x : 0.0f);
     Vector2 line_pos = {draw_x, cmd->f[1]};

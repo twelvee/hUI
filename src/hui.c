@@ -2752,3 +2752,38 @@ int hui_node_get_layout(hui_ctx *ctx, hui_node_handle h, hui_rect *out) {
     out->h = node->h;
     return HUI_OK;
 }
+
+static const hui_computed_style *hui_node_style(const hui_ctx *ctx, hui_node_handle h) {
+    if (!ctx) return NULL;
+    if (hui_node_is_null(h)) return NULL;
+    if (h.index >= ctx->dom.nodes.len) return NULL;
+    const hui_dom_node *node = &ctx->dom.nodes.data[h.index];
+    if (node->gen != h.gen) return NULL;
+    if (node->style_id >= ctx->styles.styles.len) return NULL;
+    return &ctx->styles.styles.data[node->style_id];
+}
+
+float hui_node_font_size(hui_ctx *ctx, hui_node_handle h) {
+    if (!ctx) return 0.0f;
+    const hui_computed_style *cs = hui_node_style(ctx, h);
+    if (!cs) return 0.0f;
+    float font_size = cs->font_size;
+    if (font_size <= 0.0f) font_size = 16.0f;
+    return font_size;
+}
+
+float hui_node_line_height(hui_ctx *ctx, hui_node_handle h) {
+    if (!ctx) return 0.0f;
+    const hui_computed_style *cs = hui_node_style(ctx, h);
+    if (!cs) return 0.0f;
+    float font_size = cs->font_size;
+    if (font_size <= 0.0f) font_size = 16.0f;
+    float line_height = cs->line_height;
+    if (line_height > 0.0f) {
+        if (line_height <= 4.0f)
+            line_height = line_height * font_size;
+        return line_height;
+    }
+    return font_size * HUI_TEXT_APPROX_LINE_HEIGHT;
+}
+

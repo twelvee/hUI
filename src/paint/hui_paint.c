@@ -155,7 +155,6 @@ static void hui_paint_node(hui_draw_list *list, const hui_dom *dom, const hui_st
         int is_multiline_field = is_text_field && ((node->tf_flags & HUI_NODE_TF_MULTILINE) != 0);
 
         float text_height = font_size > 0.0f ? font_size : line_height;
-        float baseline_shift = fminf(text_height * 0.12f, line_height * 0.2f);
         if (is_text_field) {
             if ((node->tf_flags & HUI_NODE_TF_HAS_SELECTION) != 0 &&
                 (node->tf_flags & HUI_NODE_TF_PLACEHOLDER) == 0 &&
@@ -180,22 +179,13 @@ static void hui_paint_node(hui_draw_list *list, const hui_dom *dom, const hui_st
                             if (line_end_col <= line_start_col) continue;
                             float highlight_x = node->x - scroll_x + char_width * (float) line_start_col;
                             float highlight_w = char_width * (float) (line_end_col - line_start_col);
-                            float line_top = node->y + line_height * (float) line;
-                            float highlight_offset = 0.0f;
-                            if (is_multiline_field || line_count > 1) {
-                                if (line_height > text_height)
-                                    highlight_offset = 0.5f * (line_height - text_height);
-                            } else if (node->h > text_height) {
-                                highlight_offset = 0.5f * (node->h - text_height);
-                            }
-                            float highlight_y = line_top + highlight_offset - baseline_shift;
-                            float highlight_bottom_limit = line_top + line_height;
-                            if (!is_multiline_field && line_count <= 1) {
-                                highlight_bottom_limit = node->y + node->h;
-                            }
+                            float highlight_y = node->y + line_height * (float) line;
+                            float line_bottom = highlight_y + line_height;
+                            if (highlight_y + text_height > line_bottom)
+                                highlight_y = line_bottom - text_height;
                             if (highlight_y < node->y) highlight_y = node->y;
-                            if (highlight_y + text_height > highlight_bottom_limit)
-                                highlight_y = highlight_bottom_limit - text_height;
+                            if (highlight_y + text_height > node->y + node->h)
+                                highlight_y = (node->y + node->h) - text_height;
                             if (node->w > 0.0f) {
                                 float max_x = node->x + node->w;
                                 if (highlight_x < node->x) {
@@ -231,19 +221,10 @@ static void hui_paint_node(hui_draw_list *list, const hui_dom *dom, const hui_st
                 hui_paint_cp_to_line_col(text, len, caret_cp, &caret_line, &caret_col);
                 float caret_x = node->x - scroll_x + char_width * (float) caret_col;
                 float caret_h = text_height;
-                float caret_y;
-                if (!is_multiline_field && line_count <= 1 && node->h > 0.0f) {
-                    caret_y = node->y + 0.5f * (node->h - caret_h) - baseline_shift;
-                } else {
-                    float line_top = node->y + line_height * (float) caret_line;
-                    float caret_offset = 0.0f;
-                    if (line_height > caret_h)
-                        caret_offset = 0.5f * (line_height - caret_h);
-                    caret_y = line_top + caret_offset - baseline_shift;
-                    float line_bottom = line_top + line_height;
-                    if (caret_y + caret_h > line_bottom)
-                        caret_y = line_bottom - caret_h;
-                }
+                float caret_y = node->y + line_height * (float) caret_line;
+                float line_bottom = caret_y + line_height;
+                if (caret_y + caret_h > line_bottom)
+                    caret_y = line_bottom - caret_h;
                 if (node->w > 0.0f) {
                     float min_x = node->x;
                     float max_x = node->x + node->w;
