@@ -16,9 +16,112 @@ void hui_style_store_init(hui_style_store *store) {
 }
 
 void hui_style_store_reset(hui_style_store *store) {
+    if (!store) return;
+    store->styles.len = 0;
+}
+
+void hui_style_store_release(hui_style_store *store) {
+    if (!store) return;
     free(store->styles.data);
     store->styles.data = NULL;
     store->styles.len = store->styles.cap = 0;
+}
+
+typedef struct {
+    hui_atom atom;
+    HUI_VEC(uint32_t) nodes;
+} hui_tag_bucket;
+
+static int hui_u32_vec_copy(HUI_VEC(uint32_t) *dst, const HUI_VEC(uint32_t) *src) {
+    if (hui_vec_reserve(dst, src->len) != 0) {
+        dst->len = 0;
+        return -1;
+    }
+    if (src->len > 0 && dst->data && src->data) {
+        memcpy(dst->data, src->data, src->len * sizeof(uint32_t));
+    }
+    dst->len = src->len;
+    return 0;
+}
+
+static void hui_collect_nodes_by_class(const hui_dom *dom, hui_atom atom, HUI_VEC(uint32_t) *out) {
+    out->len = 0;
+    if (!atom) return;
+    for (size_t i = 0; i < dom->class_keys.len; i++) {
+        if ((hui_atom) dom->class_keys.data[i] != atom) continue;
+        uint32_t offset = dom->class_offsets.data[i];
+        uint32_t count = dom->class_counts.data[i];
+        if (count == 0) return;
+        if (hui_vec_reserve(out, out->len + count) != 0) {
+            out->len = 0;
+            return;
+        }
+        for (uint32_t j = 0; j < count; j++) {
+            out->data[out->len++] = dom->class_items.data[offset + j];
+        }
+        return;
+    }
+}
+
+static void hui_collect_nodes_by_id(const hui_dom *dom, hui_atom atom, HUI_VEC(uint32_t) *out) {
+    out->len = 0;
+    if (!atom) return;
+    for (size_t i = 0; i < dom->id_keys.len; i++) {
+        if ((hui_atom) dom->id_keys.data[i] == atom) {
+            if (hui_vec_reserve(out, out->len + 1) != 0) {
+                out->len = 0;
+                return;
+            }
+            out->data[out->len++] = dom->id_vals.data[i];
+            return;
+        }
+    }
+}
+
+static void hui_collect_nodes_by_tag(const hui_dom *dom, hui_atom atom, HUI_VEC(uint32_t) *out,
+                                     HUI_VEC(hui_tag_bucket) *cache) {
+    out->len = 0;
+    if (!atom) return;
+    for (size_t i = 0; i < cache->len; i++) {
+        const hui_tag_bucket *bucket = &cache->data[i];
+        if (bucket->atom == atom) {
+            hui_u32_vec_copy(out, &bucket->nodes);
+            return;
+        }
+    }
+    hui_tag_bucket bucket;
+    bucket.atom = atom;
+    hui_vec_init(&bucket.nodes);
+    for (size_t i = 0; i < dom->nodes.len; i++) {
+        const hui_dom_node *node = &dom->nodes.data[i];
+        if (node->type == HUI_NODE_ELEM && node->tag == atom) {
+            hui_vec_push(&bucket.nodes, (uint32_t) i);
+        }
+    }
+    hui_u32_vec_copy(out, &bucket.nodes);
+    hui_vec_push(cache, bucket);
+}
+
+static void hui_collect_selector_candidates(const hui_dom *dom, const hui_selector *sel,
+                                            HUI_VEC(uint32_t) *out,
+                                            const HUI_VEC(uint32_t) *all_elements,
+                                            HUI_VEC(hui_tag_bucket) *tag_cache) {
+    out->len = 0;
+    if (!sel || sel->steps.len == 0) {
+        hui_u32_vec_copy(out, all_elements);
+        return;
+    }
+    const hui_sel_step *first = &sel->steps.data[0];
+    if (first->simple.type == HUI_SEL_ID) {
+        hui_collect_nodes_by_id(dom, first->simple.atom, out);
+    } else if (first->simple.type == HUI_SEL_CLASS) {
+        hui_collect_nodes_by_class(dom, first->simple.atom, out);
+    } else if (first->simple.type == HUI_SEL_TAG) {
+        hui_collect_nodes_by_tag(dom, first->simple.atom, out, tag_cache);
+    }
+    if (out->len == 0) {
+        hui_u32_vec_copy(out, all_elements);
+    }
 }
 
 static int hui_match_selector(const hui_selector *sel, const hui_dom *dom, uint32_t idx) {
@@ -75,9 +178,10 @@ void hui_apply_styles(hui_style_store *store, hui_dom *dom, hui_intern *atoms, c
                       uint32_t property_mask) {
     (void) atoms;
     (void) property_mask;
-    if (store->styles.cap < dom->nodes.len) hui_vec_reserve(&store->styles, dom->nodes.len);
-    store->styles.len = dom->nodes.len;
-    for (size_t i = 0; i < dom->nodes.len; i++) {
+    size_t node_count = dom->nodes.len;
+    if (store->styles.cap < node_count) hui_vec_reserve(&store->styles, node_count);
+    store->styles.len = node_count;
+    for (size_t i = 0; i < node_count; i++) {
         hui_computed_style *cs = &store->styles.data[i];
         memset(cs, 0, sizeof(*cs));
         cs->display = 1;
@@ -94,20 +198,57 @@ void hui_apply_styles(hui_style_store *store, hui_dom *dom, hui_intern *atoms, c
         cs->bg_color = 0x00000000u;
     }
 
+    HUI_VEC(uint32_t) all_elements;
+    hui_vec_init(&all_elements);
+    for (size_t i = 0; i < node_count; i++) {
+        const hui_dom_node *node = &dom->nodes.data[i];
+        if (node->type == HUI_NODE_ELEM) {
+            hui_vec_push(&all_elements, (uint32_t) i);
+        }
+    }
+
+    HUI_VEC(hui_tag_bucket) tag_cache;
+    hui_vec_init(&tag_cache);
+
+    HUI_VEC(uint32_t) selector_candidates;
+    HUI_VEC(uint32_t) rule_candidates;
+    hui_vec_init(&selector_candidates);
+    hui_vec_init(&rule_candidates);
+
+    uint8_t *rule_marker = (node_count > 0) ? (uint8_t *) malloc(node_count) : NULL;
+
     for (size_t ri = 0; ri < sheet->rules.len; ri++) {
         const hui_rule *rule = &sheet->rules.data[ri];
-        for (size_t ni = 0; ni < dom->nodes.len; ni++) {
-            const hui_dom_node *node = &dom->nodes.data[ni];
+        if (rule_marker) memset(rule_marker, 0, node_count);
+        rule_candidates.len = 0;
+
+        for (size_t si = 0; si < rule->selectors.len; si++) {
+            const hui_selector *sel = &rule->selectors.data[si];
+            selector_candidates.len = 0;
+            hui_collect_selector_candidates(dom, sel, &selector_candidates, &all_elements, &tag_cache);
+            for (size_t ci = 0; ci < selector_candidates.len; ci++) {
+                uint32_t idx = selector_candidates.data[ci];
+                if (idx >= node_count) continue;
+                if (rule_marker && rule_marker[idx]) continue;
+                if (rule_marker) rule_marker[idx] = 1;
+                hui_vec_push(&rule_candidates, idx);
+            }
+        }
+
+        for (size_t ci = 0; ci < rule_candidates.len; ci++) {
+            uint32_t idx = rule_candidates.data[ci];
+            if (idx >= node_count) continue;
+            const hui_dom_node *node = &dom->nodes.data[idx];
             if (node->type != HUI_NODE_ELEM) continue;
             int matched = 0;
             for (size_t si = 0; si < rule->selectors.len; si++) {
-                if (hui_match_selector(&rule->selectors.data[si], dom, (uint32_t) ni)) {
+                if (hui_match_selector(&rule->selectors.data[si], dom, idx)) {
                     matched = 1;
                     break;
                 }
             }
             if (!matched) continue;
-            hui_computed_style *cs = &store->styles.data[ni];
+            hui_computed_style *cs = &store->styles.data[idx];
             for (size_t di = 0; di < rule->decls.len; di++) {
                 const hui_decl *decl = &rule->decls.data[di];
                 switch (decl->id) {
@@ -197,6 +338,15 @@ void hui_apply_styles(hui_style_store *store, hui_dom *dom, hui_intern *atoms, c
             }
         }
     }
+
+    if (rule_marker) free(rule_marker);
+    hui_vec_free(&rule_candidates);
+    hui_vec_free(&selector_candidates);
+    for (size_t i = 0; i < tag_cache.len; i++) {
+        hui_vec_free(&tag_cache.data[i].nodes);
+    }
+    hui_vec_free(&tag_cache);
+    hui_vec_free(&all_elements);
 
     for (size_t i = 0; i < dom->nodes.len; i++) {
         const hui_dom_node *node = &dom->nodes.data[i];

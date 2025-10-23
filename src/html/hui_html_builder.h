@@ -33,6 +33,7 @@ typedef struct hui_dom_node {
     uint32_t gen;
     uint32_t parent;
     uint32_t first_child;
+    uint32_t last_child;
     uint32_t next_sibling;
     uint32_t style_id;
     float x, y, w, h;
@@ -43,6 +44,10 @@ typedef struct hui_dom_node {
     HUI_VEC (hui_atom) classes;
     const char *text;
     uint32_t text_len;
+    uint32_t text_cache_cp;
+    uint32_t text_cache_lines;
+    uint32_t text_cache_max_cols;
+    uint32_t text_cache_valid;
     hui_atom attr_type;
     const char *attr_placeholder;
     uint32_t attr_placeholder_len;
@@ -99,5 +104,57 @@ void hui_dom_add_index_id(hui_builder *builder, hui_atom atom, uint32_t node_ind
 void hui_dom_add_index_class(hui_builder *builder, hui_atom atom, uint32_t node_index);
 
 int hui_build_from_html(hui_builder *builder, const char *html, size_t html_len);
+
+void hui_dom_invalidate_text_cache(hui_dom_node *node);
+
+void hui_dom_text_cache_refresh(hui_dom_node *node);
+
+static inline void hui_dom_sync_last_child(hui_dom *dom, uint32_t parent) {
+    if (!dom || parent == 0xFFFFFFFFu) return;
+    hui_dom_node *p = &dom->nodes.data[parent];
+    uint32_t last = 0xFFFFFFFFu;
+    uint32_t child = p->first_child;
+    while (child != 0xFFFFFFFFu) {
+        last = child;
+        child = dom->nodes.data[child].next_sibling;
+    }
+    p->last_child = last;
+}
+
+static inline void hui_dom_link_child_tail(hui_dom *dom, uint32_t parent, uint32_t child) {
+    if (!dom || parent == 0xFFFFFFFFu || child == 0xFFFFFFFFu) return;
+    hui_dom_node *p = &dom->nodes.data[parent];
+    hui_dom_node *c = &dom->nodes.data[child];
+    c->parent = parent;
+    c->next_sibling = 0xFFFFFFFFu;
+    if (p->first_child == 0xFFFFFFFFu) {
+        p->first_child = child;
+        p->last_child = child;
+    } else {
+        uint32_t last = p->last_child;
+        if (last == 0xFFFFFFFFu) {
+            hui_dom_sync_last_child(dom, parent);
+            last = p->last_child;
+            if (last == 0xFFFFFFFFu) {
+                uint32_t iter = p->first_child;
+                uint32_t prev = 0xFFFFFFFFu;
+                while (iter != 0xFFFFFFFFu) {
+                    prev = iter;
+                    iter = dom->nodes.data[iter].next_sibling;
+                }
+                if (prev != 0xFFFFFFFFu) {
+                    dom->nodes.data[prev].next_sibling = child;
+                    p->last_child = child;
+                    return;
+                }
+                p->first_child = child;
+                p->last_child = child;
+                return;
+            }
+        }
+        dom->nodes.data[last].next_sibling = child;
+        p->last_child = child;
+    }
+}
 
 #endif

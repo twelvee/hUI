@@ -149,6 +149,55 @@ static hui_build_opts hui_normalize_build_opts(const hui_build_opts *opts);
 
 static int hui_render_opts_equal(const hui_ctx *ctx, const hui_build_opts *opts);
 
+void hui_dom_invalidate_text_cache(hui_dom_node *node) {
+    if (!node) return;
+    node->text_cache_valid = 0;
+    node->text_cache_cp = 0;
+    node->text_cache_lines = 0;
+    node->text_cache_max_cols = 0;
+}
+
+void hui_dom_text_cache_refresh(hui_dom_node *node) {
+    if (!node || node->type != HUI_NODE_TEXT) return;
+    if (node->text_cache_valid) return;
+    const char *text = node->text ? node->text : "";
+    size_t len = node->text_len;
+    uint32_t cp = 0;
+    uint32_t lines = 1;
+    uint32_t cols = 0;
+    uint32_t max_cols = 0;
+    size_t pos = 0;
+    while (pos < len) {
+        unsigned char ch = (unsigned char) text[pos];
+        size_t advance = 1;
+        while (pos + advance < len && ((unsigned char) text[pos + advance] & 0xC0u) == 0x80u) advance++;
+        if (ch == '\r') {
+            pos += advance;
+            continue;
+        }
+        cp++;
+        if (ch == '\n') {
+            if (cols > max_cols) max_cols = cols;
+            cols = 0;
+            lines++;
+        } else {
+            cols++;
+        }
+        pos += advance;
+    }
+    if (cols > max_cols) max_cols = cols;
+    if (len == 0) {
+        lines = 1;
+        cols = 0;
+        max_cols = 0;
+        cp = 0;
+    }
+    node->text_cache_cp = cp;
+    node->text_cache_lines = lines;
+    node->text_cache_max_cols = max_cols;
+    node->text_cache_valid = 1;
+}
+
 static void hui_render_cache_store(hui_ctx *ctx, const hui_build_opts *opts);
 
 static uint32_t hui_hit_test(const hui_ctx *ctx, float x, float y);
@@ -382,6 +431,7 @@ static uint32_t hui_bound_text_apply_index(hui_ctx *ctx, uint32_t template_index
     hui_dom_node *node = &ctx->dom.nodes.data[templ->node_index];
     node->text = templ->rendered;
     node->text_len = (uint32_t) out;
+    hui_dom_invalidate_text_cache(node);
     return HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT;
 }
 
@@ -426,6 +476,7 @@ static size_t hui_bound_text_prepare_node(hui_ctx *ctx, uint32_t node_index, hui
             node->binding_text_atom = tok.atom;
             node->text = "";
             node->text_len = 0;
+            hui_dom_invalidate_text_cache(node);
             hui_vec_free(&tokens);
             return 1;
         }
@@ -455,6 +506,7 @@ static size_t hui_bound_text_prepare_node(hui_ctx *ctx, uint32_t node_index, hui
     node->binding_template_index = template_index;
     node->text = "";
     node->text_len = 0;
+    hui_dom_invalidate_text_cache(node);
     hui_vec_free(&tokens);
 
     hui_bound_text_apply_index(ctx, template_index);
@@ -1076,8 +1128,18 @@ static uint32_t hui_auto_select_apply_selection(hui_ctx *ctx, hui_auto_select_fi
 
 static int hui_auto_select_fields_rebuild(hui_ctx *ctx) {
     if (!ctx) return HUI_EINVAL;
-    hui_auto_select_fields_reset(ctx);
-    if (ctx->dom.nodes.len == 0) return HUI_OK;
+    size_t old_len = ctx->auto_select_fields.len;
+    size_t reuse_index = 0;
+    if (ctx->dom.nodes.len == 0) {
+        for (size_t i = 0; i < old_len; i++) {
+            hui_auto_select_field *field = &ctx->auto_select_fields.data[i];
+            for (size_t j = 0; j < field->options.len; j++)
+                hui_auto_select_option_free(ctx, &field->options.data[j]);
+            hui_vec_free(&field->options);
+        }
+        ctx->auto_select_fields.len = 0;
+        return HUI_OK;
+    }
 
     int status = HUI_OK;
     hui_atom select_atom = hui_intern_put(&ctx->atoms, "select", strlen("select"));
@@ -1132,8 +1194,11 @@ static int hui_auto_select_fields_rebuild(hui_ctx *ctx) {
             elem->parent = (uint32_t) i;
             elem->next_sibling = old_first;
             elem->first_child = 0xFFFFFFFFu;
+            elem->last_child = 0xFFFFFFFFu;
             hui_vec_push(&elem->classes, display_class);
             node->first_child = elem_idx;
+            if (old_first == 0xFFFFFFFFu)
+                node->last_child = elem_idx;
             field.display_node = (hui_node_handle){elem_idx, elem->gen};
         }
 
@@ -1141,11 +1206,10 @@ static int hui_auto_select_fields_rebuild(hui_ctx *ctx) {
         if (display_elem->first_child == 0xFFFFFFFFu) {
             uint32_t text_idx = hui_dom_add_node(&ctx->dom, HUI_NODE_TEXT);
             hui_dom_node *text = &ctx->dom.nodes.data[text_idx];
-            text->parent = field.display_node.index;
-            text->next_sibling = 0xFFFFFFFFu;
             text->text = "";
             text->text_len = 0;
-            display_elem->first_child = text_idx;
+            hui_dom_invalidate_text_cache(text);
+            hui_dom_link_child_tail(&ctx->dom, field.display_node.index, text_idx);
             field.display_text = (hui_node_handle){text_idx, text->gen};
         } else {
             hui_dom_node *text = &ctx->dom.nodes.data[display_elem->first_child];
@@ -1156,12 +1220,16 @@ static int hui_auto_select_fields_rebuild(hui_ctx *ctx) {
                 tn->next_sibling = display_elem->first_child;
                 tn->text = "";
                 tn->text_len = 0;
+                hui_dom_invalidate_text_cache(tn);
                 display_elem->first_child = text_idx;
+                if (display_elem->last_child == 0xFFFFFFFFu)
+                    display_elem->last_child = text_idx;
                 field.display_text = (hui_node_handle){text_idx, tn->gen};
             } else {
                 field.display_text = (hui_node_handle){display_elem->first_child, text->gen};
             }
         }
+        hui_dom_sync_last_child(&ctx->dom, field.display_node.index);
 
         uint32_t menu_idx = 0xFFFFFFFFu;
         child_idx = node->first_child;
@@ -1189,12 +1257,16 @@ static int hui_auto_select_fields_rebuild(hui_ctx *ctx) {
             menu_elem->tag = hui_intern_put(&ctx->atoms, "div", strlen("div"));
             menu_elem->parent = field.node.index;
             menu_elem->first_child = 0xFFFFFFFFu;
+            menu_elem->last_child = 0xFFFFFFFFu;
             menu_elem->next_sibling = 0xFFFFFFFFu;
             hui_vec_push(&menu_elem->classes, menu_class);
 
             hui_dom_node *display_dom = &ctx->dom.nodes.data[field.display_node.index];
-            menu_elem->next_sibling = display_dom->next_sibling;
+            uint32_t after_display = display_dom->next_sibling;
+            menu_elem->next_sibling = after_display;
             display_dom->next_sibling = elem_idx;
+            if (after_display == 0xFFFFFFFFu)
+                node->last_child = elem_idx;
             menu_idx = elem_idx;
         }
 
@@ -1203,11 +1275,9 @@ static int hui_auto_select_fields_rebuild(hui_ctx *ctx) {
 
         // Reparent option nodes under menu.
         hui_dom_node *menu_elem = &ctx->dom.nodes.data[menu_idx];
-        uint32_t menu_tail = menu_elem->first_child;
-        if (menu_tail != 0xFFFFFFFFu) {
-            while (ctx->dom.nodes.data[menu_tail].next_sibling != 0xFFFFFFFFu)
-                menu_tail = ctx->dom.nodes.data[menu_tail].next_sibling;
-        }
+        hui_dom_sync_last_child(&ctx->dom, (uint32_t) i);
+        hui_dom_sync_last_child(&ctx->dom, menu_idx);
+        uint32_t menu_tail = menu_elem->last_child;
 
         uint32_t prev = 0xFFFFFFFFu;
         uint32_t current = node->first_child;
@@ -1224,19 +1294,16 @@ static int hui_auto_select_fields_rebuild(hui_ctx *ctx) {
                     node->first_child = next;
                 else
                     ctx->dom.nodes.data[prev].next_sibling = next;
-                child->parent = menu_idx;
                 child->next_sibling = 0xFFFFFFFFu;
-                if (menu_tail == 0xFFFFFFFFu) {
-                    menu_elem->first_child = current;
-                } else {
-                    ctx->dom.nodes.data[menu_tail].next_sibling = current;
-                }
-                menu_tail = current;
+                hui_dom_link_child_tail(&ctx->dom, menu_idx, current);
+                menu_tail = menu_elem->last_child;
             } else {
                 prev = current;
             }
             current = next;
         }
+        hui_dom_sync_last_child(&ctx->dom, (uint32_t) i);
+        hui_dom_sync_last_child(&ctx->dom, menu_idx);
 
         uint32_t opt_idx = menu_elem->first_child;
         size_t option_counter = 0;
@@ -1260,9 +1327,13 @@ static int hui_auto_select_fields_rebuild(hui_ctx *ctx) {
                     tn->parent = opt_idx;
                     tn->text = "";
                     tn->text_len = 0;
+                    hui_dom_invalidate_text_cache(tn);
                     tn->next_sibling = child->first_child;
                     child->first_child = text_child;
+                    if (child->last_child == 0xFFFFFFFFu)
+                        child->last_child = text_child;
                 }
+                hui_dom_sync_last_child(&ctx->dom, opt_idx);
                 hui_dom_node *text_node = &ctx->dom.nodes.data[text_child];
                 const char *src = text_node->text ? text_node->text : "";
                 size_t len = text_node->text_len;
@@ -1314,8 +1385,21 @@ static int hui_auto_select_fields_rebuild(hui_ctx *ctx) {
             continue;
         }
 
-        hui_vec_push(&ctx->auto_select_fields, field);
-        hui_auto_select_field *stored = &ctx->auto_select_fields.data[ctx->auto_select_fields.len - 1];
+        hui_auto_select_field *stored = NULL;
+        if (reuse_index < old_len) {
+            stored = &ctx->auto_select_fields.data[reuse_index];
+            for (size_t j = 0; j < stored->options.len; j++)
+                hui_auto_select_option_free(ctx, &stored->options.data[j]);
+            hui_vec_free(&stored->options);
+            *stored = field;
+        } else {
+            hui_vec_push(&ctx->auto_select_fields, field);
+            stored = &ctx->auto_select_fields.data[ctx->auto_select_fields.len - 1];
+        }
+        field.options.data = NULL;
+        field.options.len = 0;
+        field.options.cap = 0;
+        reuse_index++;
 
         int selected_index = stored->selected_index;
         int binding_matched = 0;
@@ -1342,6 +1426,14 @@ static int hui_auto_select_fields_rebuild(hui_ctx *ctx) {
             hui_dom_set_text(ctx, stored->display_text, "");
         hui_select_apply_visibility(ctx, stored);
     }
+
+    for (size_t i = reuse_index; i < old_len; i++) {
+        hui_auto_select_field *left = &ctx->auto_select_fields.data[i];
+        for (size_t j = 0; j < left->options.len; j++)
+            hui_auto_select_option_free(ctx, &left->options.data[j]);
+        hui_vec_free(&left->options);
+    }
+    ctx->auto_select_fields.len = reuse_index;
 
     return status;
 
@@ -1532,6 +1624,7 @@ static uint32_t hui_binding_apply_text_nodes(hui_ctx *ctx, hui_binding_entry *en
                 node->text = "";
                 node->text_len = 0;
             }
+            hui_dom_invalidate_text_cache(node);
             dirty |= HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT;
         }
     }
@@ -1838,8 +1931,8 @@ void hui_destroy(hui_ctx *ctx) {
     hui_intern_reset(&ctx->atoms);
     hui_dom_reset(&ctx->dom);
     hui_css_reset(&ctx->stylesheet);
-    hui_style_store_reset(&ctx->styles);
-    hui_draw_list_reset(&ctx->draw);
+    hui_style_store_release(&ctx->styles);
+    hui_draw_list_release(&ctx->draw);
     hui_bound_texts_reset(ctx);
     hui_vec_free(&ctx->bound_texts);
     hui_vec_free(&ctx->input_events);
@@ -2644,6 +2737,7 @@ int hui_dom_set_text(hui_ctx *ctx, hui_node_handle h, const char *text_utf8) {
     if (node->type != HUI_NODE_TEXT) return HUI_EINVAL;
     node->text = text_utf8;
     node->text_len = (uint32_t) (text_utf8 ? strlen(text_utf8) : 0);
+    hui_dom_invalidate_text_cache(node);
     hui_mark_dirty(ctx, h, HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT);
     return HUI_OK;
 }
@@ -2660,6 +2754,7 @@ hui_node_handle hui_dom_create_text(hui_ctx *ctx, const char *text_utf8) {
     hui_dom_node *node = &ctx->dom.nodes.data[idx];
     node->text = text_utf8;
     node->text_len = (uint32_t) (text_utf8 ? strlen(text_utf8) : 0);
+    hui_dom_invalidate_text_cache(node);
     return (hui_node_handle){idx, node->gen};
 }
 
@@ -2667,15 +2762,28 @@ int hui_dom_append_child(hui_ctx *ctx, hui_node_handle parent, hui_node_handle c
     if (!hui_valid_handle(ctx, parent) || !hui_valid_handle(ctx, child)) return HUI_EINVAL;
     hui_dom_node *p = &ctx->dom.nodes.data[parent.index];
     hui_dom_node *c = &ctx->dom.nodes.data[child.index];
-    c->parent = parent.index;
-    if (p->first_child == 0xFFFFFFFFu) {
-        p->first_child = child.index;
-    } else {
-        uint32_t sibling = p->first_child;
-        while (ctx->dom.nodes.data[sibling].next_sibling != 0xFFFFFFFFu)
-            sibling = ctx->dom.nodes.data[sibling].next_sibling;
-        ctx->dom.nodes.data[sibling].next_sibling = child.index;
+    if (c->parent != 0xFFFFFFFFu && c->parent < ctx->dom.nodes.len) {
+        hui_dom_node *old = &ctx->dom.nodes.data[c->parent];
+        uint32_t prev = 0xFFFFFFFFu;
+        uint32_t curr = old->first_child;
+        while (curr != 0xFFFFFFFFu) {
+            uint32_t next = ctx->dom.nodes.data[curr].next_sibling;
+            if (curr == child.index) {
+                if (prev == 0xFFFFFFFFu) {
+                    old->first_child = next;
+                } else {
+                    ctx->dom.nodes.data[prev].next_sibling = next;
+                }
+                if (old->last_child == child.index) {
+                    old->last_child = prev;
+                }
+                break;
+            }
+            prev = curr;
+            curr = next;
+        }
     }
+    hui_dom_link_child_tail(&ctx->dom, parent.index, child.index);
     hui_mark_dirty(ctx, parent, HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT);
     return HUI_OK;
 }

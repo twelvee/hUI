@@ -147,9 +147,16 @@ static void hui_paint_node(hui_draw_list *list, const hui_dom *dom, const hui_st
         float char_width = font_size * HUI_TEXT_APPROX_CHAR_ADVANCE;
         float line_height = cs->line_height > 0.0f ? cs->line_height : (font_size * HUI_TEXT_APPROX_LINE_HEIGHT);
         if (cs->line_height > 0.0f && cs->line_height <= 4.0f) line_height = cs->line_height * font_size;
-        size_t cp_total = has_text ? hui_paint_utf8_count_total(text, len) : 0;
-        size_t line_count = has_text ? hui_paint_count_lines(text, len) : 1;
-        if (line_count == 0) line_count = 1;
+        size_t cp_total = 0;
+        size_t line_count = 1;
+        if (has_text) {
+            hui_dom_node *mutable_node = (hui_dom_node *) node;
+            hui_dom_text_cache_refresh(mutable_node);
+            cp_total = mutable_node->text_cache_cp;
+            line_count = mutable_node->text_cache_lines ? mutable_node->text_cache_lines : 1;
+            text = mutable_node->text ? mutable_node->text : "";
+            len = mutable_node->text_len;
+        }
 
         float scroll_x = is_text_field ? node->tf_scroll_x : 0.0f;
         int is_multiline_field = is_text_field && ((node->tf_flags & HUI_NODE_TF_MULTILINE) != 0);
@@ -282,6 +289,11 @@ void hui_draw_list_init(hui_draw_list *list) {
 }
 
 void hui_draw_list_reset(hui_draw_list *list) {
+    if (!list) return;
+    list->cmds.len = 0;
+}
+
+void hui_draw_list_release(hui_draw_list *list) {
     free(list->cmds.data);
     list->cmds.data = NULL;
     list->cmds.len = list->cmds.cap = 0;

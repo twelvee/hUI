@@ -50,6 +50,7 @@ uint32_t hui_dom_add_node(hui_dom *dom, hui_node_type type) {
     node.type = type;
     node.parent = 0xFFFFFFFFu;
     node.first_child = 0xFFFFFFFFu;
+    node.last_child = 0xFFFFFFFFu;
     node.next_sibling = 0xFFFFFFFFu;
     node.gen = 1;
     hui_vec_init(&node.classes);
@@ -174,17 +175,10 @@ int hui_build_from_html(hui_builder *builder, const char *html, size_t html_len)
                 if (all_ws) break;
                 uint32_t idx = hui_dom_add_node(builder->dom, HUI_NODE_TEXT);
                 hui_dom_node *node = &builder->dom->nodes.data[idx];
-                node->parent = parent;
                 node->text = token.text.p;
                 node->text_len = (uint32_t) token.text.n;
-                if (builder->dom->nodes.data[parent].first_child == 0xFFFFFFFFu) {
-                    builder->dom->nodes.data[parent].first_child = idx;
-                } else {
-                    uint32_t child = builder->dom->nodes.data[parent].first_child;
-                    while (builder->dom->nodes.data[child].next_sibling != 0xFFFFFFFFu)
-                        child = builder->dom->nodes.data[child].next_sibling;
-                    builder->dom->nodes.data[child].next_sibling = idx;
-                }
+                hui_dom_invalidate_text_cache(node);
+                hui_dom_link_child_tail(builder->dom, parent, idx);
                 kept++;
             }
             break;
@@ -255,15 +249,7 @@ int hui_build_from_html(hui_builder *builder, const char *html, size_t html_len)
                     if (node->id) hui_dom_add_index_id(builder, node->id, idx);
                     uint32_t parent = hui_find_kept_parent(stack.data, stack.len);
                     if (parent != 0xFFFFFFFFu) {
-                        node->parent = parent;
-                        if (builder->dom->nodes.data[parent].first_child == 0xFFFFFFFFu) {
-                            builder->dom->nodes.data[parent].first_child = idx;
-                        } else {
-                            uint32_t child = builder->dom->nodes.data[parent].first_child;
-                            while (builder->dom->nodes.data[child].next_sibling != 0xFFFFFFFFu)
-                                child = builder->dom->nodes.data[child].next_sibling;
-                            builder->dom->nodes.data[child].next_sibling = idx;
-                        }
+                        hui_dom_link_child_tail(builder->dom, parent, idx);
                     } else {
                         if (last_root != 0xFFFFFFFFu)
                             builder->dom->nodes.data[last_root].next_sibling = idx;

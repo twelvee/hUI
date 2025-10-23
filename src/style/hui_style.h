@@ -47,6 +47,8 @@ void hui_style_store_init(hui_style_store *store);
 
 void hui_style_store_reset(hui_style_store *store);
 
+void hui_style_store_release(hui_style_store *store);
+
 void hui_apply_styles(hui_style_store *store, hui_dom *dom, hui_intern *atoms, const hui_stylesheet *sheet,
                       uint32_t property_mask);
 

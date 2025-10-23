@@ -3,40 +3,6 @@
 #include <string.h>
 #include "../../include/hui/hui.h"
 
-static size_t layout_utf8_next(const char *text, size_t len, size_t offset) {
-    if (!text || offset >= len) return len;
-    offset++;
-    while (offset < len && ((unsigned char) text[offset] & 0xC0u) == 0x80u) offset++;
-    if (offset > len) offset = len;
-    return offset;
-}
-
-static void layout_measure_multiline(const char *text, uint32_t len, size_t *out_lines, size_t *out_max_cols) {
-    size_t lines = 1;
-    size_t max_cols = 0;
-    size_t cols = 0;
-    size_t pos = 0;
-    while (pos < len) {
-        unsigned char ch = (unsigned char) text[pos];
-        if (ch == '\r') {
-            pos++;
-            continue;
-        }
-        if (ch == '\n') {
-            if (cols > max_cols) max_cols = cols;
-            cols = 0;
-            lines++;
-            pos++;
-            continue;
-        }
-        cols++;
-        pos = layout_utf8_next(text, len, pos);
-    }
-    if (cols > max_cols) max_cols = cols;
-    if (out_lines) *out_lines = lines;
-    if (out_max_cols) *out_max_cols = max_cols;
-}
-
 static void layout_node(hui_dom *dom, const hui_style_store *styles, uint32_t idx, float x, float y, float width) {
     hui_dom_node *node = &dom->nodes.data[idx];
     const hui_computed_style *cs = &styles->styles.data[idx];
@@ -57,11 +23,11 @@ static void layout_node(hui_dom *dom, const hui_style_store *styles, uint32_t id
         float line_h = cs->line_height > 0.0f ? cs->line_height : (fs * HUI_TEXT_APPROX_LINE_HEIGHT);
         if (cs->line_height > 0.0f && cs->line_height <= 4.0f) line_h = cs->line_height * fs;
         size_t lines = 1;
-        size_t max_cols = node->text_len;
+        size_t max_cols = 0;
         if (node->text && node->text_len > 0) {
-            layout_measure_multiline(node->text, node->text_len, &lines, &max_cols);
-        } else {
-            max_cols = 0;
+            hui_dom_text_cache_refresh(node);
+            lines = node->text_cache_lines ? node->text_cache_lines : 1;
+            max_cols = node->text_cache_max_cols;
         }
         float char_w = HUI_TEXT_APPROX_CHAR_ADVANCE * fs;
         float text_w = char_w * (float) max_cols;
