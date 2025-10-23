@@ -364,6 +364,18 @@ int main(void) {
         UnloadFileText(css_text);
     }
 
+    const char *demo_palette =
+            ":root {\n"
+            "    --ink: #e8e8e3;\n"
+            "    --muted: #9fb0b7;\n"
+            "    --accent: #8affd1;\n"
+            "    --accent2: #d6fd79;\n"
+            "    --bg: #0d0f12;\n"
+            "}\n";
+    if (hui_feed_css(ctx, (hui_bytes){(const uint8_t *) demo_palette, strlen(demo_palette)}, 1) != HUI_OK) {
+        TraceLog(LOG_WARNING, "Failed to apply demo palette: %s", hui_last_error(ctx));
+    }
+
     if (hui_parse(ctx) != HUI_OK) {
         TraceLog(LOG_ERROR, "Parse failed: %s", hui_last_error(ctx));
         hui_destroy(ctx);

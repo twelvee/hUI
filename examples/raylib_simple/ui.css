@@ -5,9 +5,20 @@
     font-style: normal;
 }
 
+:root {
+    --ink: #f5f5f5;
+    --muted: #b0b0b0;
+    --accent: olive;
+    --accent2: #d6fd79;
+    --bg: #1e1e1e;
+    --surface: #2a2a2a;
+    --surface-alt: #1b1b1b;
+    --surface-muted: #202020;
+}
+
 body {
-    background-color: #1e1e1e;
-    color: #f5f5f5;
+    background-color: var(--bg, #1e1e1e);
+    color: var(--ink, #f5f5f5);
     margin: 0;
     font-size: 18px;
     line-height: 1.6;
@@ -20,7 +31,8 @@ main {
 }
 
 .card {
-    background-color: #2a2a2a;
+    background-color: var(--surface, #2a2a2a);
+    color: var(--ink, #f5f5f5);
     padding: 24px;
     margin: 0 auto;
     width: 360px;
@@ -34,7 +46,7 @@ main {
 .card-subtitle {
     font-size: 16px;
     margin: 0 0 16px 0;
-    color: #d0d0d0;
+    color: var(--muted, #d0d0d0);
 }
 
 .field {
@@ -43,7 +55,7 @@ main {
 
 .field-label {
     font-size: 14px;
-    color: #b0b0b0;
+    color: var(--muted, #b0b0b0);
     margin-bottom: 6px;
 }
 
@@ -51,8 +63,8 @@ input,
 textarea,
 select {
     width: 100%;
-    background-color: #1b1b1b;
-    color: #ffffff;
+    background-color: var(--surface-alt, #1b1b1b);
+    color: var(--ink, #ffffff);
     padding: 10px;
     border: none;
     font-size: 15px;
@@ -62,12 +74,12 @@ select {
 
 .hui-select {
     cursor: pointer;
-    background-color: #1b1b1b;
-    border: 1px solid #3a3a3a;
+    background-color: var(--surface-alt, #1b1b1b);
+    border: 1px solid var(--surface-muted, #3a3a3a);
     border-radius: 4px;
     padding: 10px;
     margin-bottom: 16px;
-    color: #ffffff;
+    color: var(--ink, #ffffff);
     font-family: "Lobster", "Inter", cursive;
 }
 
@@ -77,19 +89,19 @@ select {
 
 .hui-select-menu {
     margin-top: 8px;
-    border: 1px solid #3a3a3a;
+    border: 1px solid var(--surface-muted, #3a3a3a);
     border-radius: 4px;
-    background-color: #252525;
+    background-color: var(--surface, #252525);
     box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
 }
 
 .hui-select-option {
     cursor: pointer;
-    background-color: #252525;
+    background-color: var(--surface, #252525);
     border-top: 1px solid #3a3a3a;
     padding: 8px 10px;
     font-size: 15px;
-    color: #ffffff;
+    color: var(--ink, #ffffff);
 }
 
 .hui-select-option:first-child {
@@ -97,11 +109,11 @@ select {
 }
 
 .hui-select-option-hover {
-    background-color: #2f2f2f;
+    background-color: var(--surface-alt, #2f2f2f);
 }
 
 .hui-select-option-selected {
-    color: #3a7afe;
+    color: var(--accent2, var(--accent, #3a7afe));
     font-weight: 600;
 }
 
@@ -116,17 +128,17 @@ select {
 }
 
 .summary {
-    background-color: #202020;
+    background-color: var(--surface-muted, #202020);
     padding: 12px;
     margin-bottom: 16px;
 }
 
 .summary-label {
-    color: #b0b0b0;
+    color: var(--muted, #b0b0b0);
 }
 
 .summary-value {
-    color: #ffffff;
+    color: var(--ink, #ffffff);
     display: block;
     margin-top: 4px;
     font-size: 15px;
@@ -138,8 +150,8 @@ select {
 }
 
 button {
-    background-color: #3a7afe;
-    color: #ffffff;
+    background-color: var(--accent, #3a7afe);
+    color: var(--ink, #ffffff);
     padding: 12px;
     font-size: 16px;
 }

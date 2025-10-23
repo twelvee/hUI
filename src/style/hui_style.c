@@ -132,12 +132,18 @@ static int hui_match_selector(const hui_selector *sel, const hui_dom *dom, uint3
         if (step >= sel->steps.len) return 1;
         hui_sel_step s = sel->steps.data[step];
         if (node->type != HUI_NODE_ELEM) return 0;
-        int ok = 0;
-        if (s.simple.type == HUI_SEL_TAG) ok = (node->tag == s.simple.atom);
-        else if (s.simple.type == HUI_SEL_ID) ok = (node->id == s.simple.atom);
-        else if (s.simple.type == HUI_SEL_CLASS) ok = hui_node_has_class(node, s.simple.atom);
+        int ok = 1;
+        if (s.simple.type == HUI_SEL_TAG) {
+            if (s.simple.atom != 0) ok = (node->tag == s.simple.atom);
+        } else if (s.simple.type == HUI_SEL_ID) {
+            ok = (node->id == s.simple.atom);
+        } else if (s.simple.type == HUI_SEL_CLASS) {
+            ok = hui_node_has_class(node, s.simple.atom);
+        }
         if (!ok) return 0;
         if ((s.pseudo_mask & HUI_SEL_PSEUDO_HOVER) && !(node->flags & HUI_NODE_FLAG_HOVER))
+            return 0;
+        if ((s.pseudo_mask & HUI_SEL_PSEUDO_ROOT) && current != dom->root)
             return 0;
         if (step + 1 >= sel->steps.len) return 1;
         hui_combinator comb = sel->steps.data[step].comb;

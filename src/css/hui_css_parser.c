@@ -183,6 +183,118 @@ static void skip_ws(const char *s, size_t n, size_t *i) {
     }
 }
 
+static void trim_ws(const char **ptr, size_t *len) {
+    if (!ptr || !len || !*ptr) return;
+    const char *s = *ptr;
+    size_t n = *len;
+    while (n > 0 && isspace((unsigned char) s[0])) {
+        s++;
+        n--;
+    }
+    while (n > 0 && isspace((unsigned char) s[n - 1])) {
+        n--;
+    }
+    *ptr = s;
+    *len = n;
+}
+
+static const hui_css_custom_prop *hui_css_find_custom_prop(const hui_stylesheet *sheet, hui_atom name) {
+    if (!sheet) return NULL;
+    for (size_t i = 0; i < sheet->custom_props.len; i++) {
+        const hui_css_custom_prop *prop = &sheet->custom_props.data[i];
+        if (prop->name == name) return prop;
+    }
+    return NULL;
+}
+
+static int hui_css_set_custom_prop(hui_stylesheet *sheet, hui_atom name, const char *value, size_t value_len) {
+    if (!sheet) return -1;
+    char *copy = hui_css_strndup(value, value_len);
+    if (!copy) return -1;
+    for (size_t i = 0; i < sheet->custom_props.len; i++) {
+        hui_css_custom_prop *prop = &sheet->custom_props.data[i];
+        if (prop->name == name) {
+            if (prop->value) free(prop->value);
+            prop->value = copy;
+            prop->value_len = value_len;
+            return 0;
+        }
+    }
+    hui_css_custom_prop prop;
+    prop.name = name;
+    prop.value = copy;
+    prop.value_len = value_len;
+    hui_vec_push(&sheet->custom_props, prop);
+    return 0;
+}
+
+#define HUI_CSS_MAX_VAR_DEPTH 16
+
+static int hui_css_try_resolve_var(const hui_stylesheet *sheet, hui_intern *atoms,
+                                   const char **value_ptr, size_t *value_len, int depth) {
+    if (!value_ptr || !value_len || !*value_ptr) return -1;
+    if (depth > HUI_CSS_MAX_VAR_DEPTH) return -1;
+    trim_ws(value_ptr, value_len);
+    const char *s = *value_ptr;
+    size_t n = *value_len;
+    if (n < 4 || strncmp(s, "var(", 4) != 0) return 0;
+    size_t pos = 4;
+    int paren_depth = 1;
+    while (pos < n) {
+        char c = s[pos];
+        if (c == '(') paren_depth++;
+        else if (c == ')') {
+            paren_depth--;
+            if (paren_depth == 0) break;
+        }
+        pos++;
+    }
+    if (paren_depth != 0) return -1;
+    size_t inner_len = (pos >= 4) ? (pos - 4) : 0;
+    const char *inner = s + 4;
+    size_t tail_pos = pos + 1;
+    const char *tail_ptr = s + tail_pos;
+    size_t tail_len = (tail_pos <= n) ? (n - tail_pos) : 0;
+    trim_ws(&tail_ptr, &tail_len);
+    if (tail_len != 0) return -1;
+    size_t name_start = 0;
+    while (name_start < inner_len && isspace((unsigned char) inner[name_start])) name_start++;
+    size_t name_end = name_start;
+    while (name_end < inner_len && inner[name_end] != ',') name_end++;
+    size_t name_len = (name_end > name_start) ? (name_end - name_start) : 0;
+    while (name_len > 0 && isspace((unsigned char) inner[name_start + name_len - 1])) name_len--;
+    if (name_len < 2 || inner[name_start] != '-' || inner[name_start + 1] != '-') return -1;
+    hui_atom var_name = hui_intern_put(atoms, inner + name_start, name_len);
+    const hui_css_custom_prop *prop = hui_css_find_custom_prop(sheet, var_name);
+    const char *fallback_ptr = NULL;
+    size_t fallback_len = 0;
+    if (name_end < inner_len && inner[name_end] == ',') {
+        size_t fb_start = name_end + 1;
+        fallback_ptr = inner + fb_start;
+        fallback_len = inner_len - fb_start;
+        trim_ws(&fallback_ptr, &fallback_len);
+    }
+    if (prop) {
+        const char *resolved_ptr = prop->value ? prop->value : "";
+        size_t resolved_len = prop->value_len;
+        int status = hui_css_try_resolve_var(sheet, atoms, &resolved_ptr, &resolved_len, depth + 1);
+        if (status < 0) return -1;
+        *value_ptr = resolved_ptr;
+        *value_len = resolved_len;
+        return 1;
+    }
+    if (fallback_ptr && fallback_len > 0) {
+        const char *resolved_ptr = fallback_ptr;
+        size_t resolved_len = fallback_len;
+        int status = hui_css_try_resolve_var(sheet, atoms, &resolved_ptr, &resolved_len, depth + 1);
+        if (status < 0) return -1;
+        *value_ptr = resolved_ptr;
+        *value_len = resolved_len;
+        return 1;
+    }
+    return -1;
+}
+
 static int is_name_char(char c) {
     return isalnum((unsigned char) c) || c == '-' || c == '_';
 }
@@ -194,18 +306,88 @@ static int hexval(char c) {
     return -1;
 }
 
-static uint32_t parse_hex_color(const char *s, size_t n) {
-    if (n == 7 && s[0] == '#') {
+static int parse_hex_color(const char *s, size_t n, uint32_t *out_color) {
+    if (!s || n < 4 || s[0] != '#') return -1;
+    if (n == 7) {
         int r1 = hexval(s[1]), r2 = hexval(s[2]);
         int g1 = hexval(s[3]), g2 = hexval(s[4]);
         int b1 = hexval(s[5]), b2 = hexval(s[6]);
-        if (r1 < 0 || r2 < 0 || g1 < 0 || g2 < 0 || b1 < 0 || b2 < 0) return 0xFF000000u;
+        if (r1 < 0 || r2 < 0 || g1 < 0 || g2 < 0 || b1 < 0 || b2 < 0) return -1;
         uint32_t r = (uint32_t) (r1 * 16 + r2);
         uint32_t g = (uint32_t) (g1 * 16 + g2);
         uint32_t b = (uint32_t) (b1 * 16 + b2);
-        return 0xFF000000u | (r << 16) | (g << 8) | b;
+        if (out_color) *out_color = 0xFF000000u | (r << 16) | (g << 8) | b;
+        return 0;
     }
-    return 0xFF000000u;
+    if (n == 4) {
+        int r = hexval(s[1]);
+        int g = hexval(s[2]);
+        int b = hexval(s[3]);
+        if (r < 0 || g < 0 || b < 0) return -1;
+        uint32_t rr = (uint32_t) (r * 16 + r);
+        uint32_t gg = (uint32_t) (g * 16 + g);
+        uint32_t bb = (uint32_t) (b * 16 + b);
+        if (out_color) *out_color = 0xFF000000u | (rr << 16) | (gg << 8) | bb;
+        return 0;
+    }
+    return -1;
+}
+
+static int parse_named_color(const char *s, size_t n, uint32_t *out_color) {
+    if (!s || n == 0) return -1;
+    char buf[32];
+    if (n >= sizeof(buf)) return -1;
+    for (size_t i = 0; i < n; i++) {
+        char c = s[i];
+        if (c >= 'A' && c <= 'Z') c = (char) (c - 'A' + 'a');
+        buf[i] = c;
+    }
+    buf[n] = '\0';
+    struct color_kw { const char *name; uint32_t value; };
+    static const struct color_kw keywords[] = {
+        {"black", 0xFF000000u},
+        {"silver", 0xFFC0C0C0u},
+        {"gray", 0xFF808080u},
+        {"white", 0xFFFFFFFFu},
+        {"maroon", 0xFF800000u},
+        {"red", 0xFFFF0000u},
+        {"purple", 0xFF800080u},
+        {"fuchsia", 0xFFFF00FFu},
+        {"green", 0xFF008000u},
+        {"lime", 0xFF00FF00u},
+        {"olive", 0xFF808000u},
+        {"yellow", 0xFFFFFF00u},
+        {"navy", 0xFF000080u},
+        {"blue", 0xFF0000FFu},
+        {"teal", 0xFF008080u},
+        {"aqua", 0xFF00FFFFu},
+        {"orange", 0xFFFFA500u},
+        {"transparent", 0x00000000u}
+    };
+    for (size_t i = 0; i < sizeof(keywords) / sizeof(keywords[0]); i++) {
+        if (strcmp(buf, keywords[i].name) == 0) {
+            if (out_color) *out_color = keywords[i].value;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static uint32_t parse_color_value(const char *s, size_t n, int *ok) {
+    const char *ptr = s;
+    size_t len = n;
+    trim_ws(&ptr, &len);
+    uint32_t color = 0;
+    if (parse_hex_color(ptr, len, &color) == 0) {
+        if (ok) *ok = 1;
+        return color;
+    }
+    if (parse_named_color(ptr, len, &color) == 0) {
+        if (ok) *ok = 1;
+        return color;
+    }
+    if (ok) *ok = 0;
+    return 0;
 }
 
 static hui_selector parse_selector(hui_intern *atoms, const char *css, size_t n, size_t *i) {
@@ -225,6 +407,7 @@ static hui_selector parse_selector(hui_intern *atoms, const char *css, size_t n,
         step.simple.type = 0;
         step.simple.atom = 0;
         step.pseudo_mask = HUI_SEL_PSEUDO_NONE;
+        int simple_defined = 0;
         if (css[*i] == '.') {
             (*i)++;
             size_t start = *i;
@@ -232,6 +415,7 @@ static hui_selector parse_selector(hui_intern *atoms, const char *css, size_t n,
             step.simple.type = HUI_SEL_CLASS;
             step.simple.atom = hui_intern_put(atoms, css + start, *i - start);
             sel.specificity += 10;
+            simple_defined = 1;
         } else if (css[*i] == '#') {
             (*i)++;
             size_t start = *i;
@@ -239,12 +423,14 @@ static hui_selector parse_selector(hui_intern *atoms, const char *css, size_t n,
             step.simple.type = HUI_SEL_ID;
             step.simple.atom = hui_intern_put(atoms, css + start, *i - start);
             sel.specificity += 100;
+            simple_defined = 1;
         } else if (is_name_char(css[*i])) {
             size_t start = *i;
             while (*i < n && is_name_char(css[*i])) (*i)++;
             step.simple.type = HUI_SEL_TAG;
             step.simple.atom = hui_intern_put(atoms, css + start, *i - start);
             sel.specificity += 1;
+            simple_defined = 1;
         } else if (css[*i] == '>') {
             (*i)++;
             skip_ws(css, n, i);
@@ -256,6 +442,8 @@ static hui_selector parse_selector(hui_intern *atoms, const char *css, size_t n,
             if (temp.len > 0)
                 temp.data[temp.len - 1].step.comb = HUI_COMB_DESC;
             continue;
+        } else if (css[*i] == ':') {
+            /* Pseudo selector without preceding simple selector */
         } else {
             (*i)++;
             continue;
@@ -268,8 +456,12 @@ static hui_selector parse_selector(hui_intern *atoms, const char *css, size_t n,
             if (plen == 5 && strncmp(css + start, "hover", 5) == 0) {
                 step.pseudo_mask |= HUI_SEL_PSEUDO_HOVER;
                 sel.specificity += 10;
+            } else if (plen == 4 && strncmp(css + start, "root", 4) == 0) {
+                step.pseudo_mask |= HUI_SEL_PSEUDO_ROOT;
+                sel.specificity += 10;
             }
         }
+        if (!simple_defined && step.pseudo_mask == HUI_SEL_PSEUDO_NONE) continue;
         Temp t;
         t.step = step;
         hui_vec_push(&temp, t);
@@ -286,6 +478,7 @@ static hui_selector parse_selector(hui_intern *atoms, const char *css, size_t n,
 void hui_css_init(hui_stylesheet *sheet) {
     hui_vec_init(&sheet->rules);
     hui_vec_init(&sheet->font_faces);
+    hui_vec_init(&sheet->custom_props);
 }
 
 void hui_css_reset(hui_stylesheet *sheet) {
@@ -319,9 +512,27 @@ void hui_css_reset(hui_stylesheet *sheet) {
         }
     }
     hui_vec_free(&sheet->font_faces);
+    for (size_t i = 0; i < sheet->custom_props.len; i++) {
+        hui_css_custom_prop *prop = &sheet->custom_props.data[i];
+        if (prop->value) {
+            free(prop->value);
+            prop->value = NULL;
+        }
+        prop->value_len = 0;
+    }
+    hui_vec_free(&sheet->custom_props);
 }
 
 int hui_css_parse(hui_stylesheet *sheet, hui_intern *atoms, const char *css, size_t len) {
+    for (size_t i = 0; i < sheet->custom_props.len; i++) {
+        hui_css_custom_prop *prop = &sheet->custom_props.data[i];
+        if (prop->value) {
+            free(prop->value);
+            prop->value = NULL;
+        }
+        prop->value_len = 0;
+    }
+    sheet->custom_props.len = 0;
     size_t i = 0;
     while (1) {
         skip_ws(css, len, &i);
@@ -415,6 +626,19 @@ int hui_css_parse(hui_stylesheet *sheet, hui_intern *atoms, const char *css, siz
             }
             break;
         }
+        int rule_is_root_scope = 1;
+        if (rule.selectors.len == 0) rule_is_root_scope = 0;
+        for (size_t si = 0; si < rule.selectors.len && rule_is_root_scope; si++) {
+            const hui_selector *sel = &rule.selectors.data[si];
+            int selector_has_root = 0;
+            for (size_t sj = 0; sj < sel->steps.len; sj++) {
+                if (sel->steps.data[sj].pseudo_mask & HUI_SEL_PSEUDO_ROOT) {
+                    selector_has_root = 1;
+                    break;
+                }
+            }
+            if (!selector_has_root) rule_is_root_scope = 0;
+        }
         while (i < len) {
             skip_ws(css, len, &i);
             if (i < len && css[i] == '}') {
@@ -432,6 +656,20 @@ int hui_css_parse(hui_stylesheet *sheet, hui_intern *atoms, const char *css, siz
             size_t value_len = i - value_start;
             const char *name_ptr = css + name_start;
             const char *value_ptr = css + value_start;
+            trim_ws(&value_ptr, &value_len);
+            if (name_len >= 2 && name_ptr[0] == '-' && name_ptr[1] == '-') {
+                if (rule_is_root_scope) {
+                    hui_atom var_name = hui_intern_put(atoms, name_ptr, name_len);
+                    hui_css_set_custom_prop(sheet, var_name, value_ptr, value_len);
+                }
+                goto after_push;
+            }
+            const char *resolved_ptr = value_ptr;
+            size_t resolved_len = value_len;
+            int var_status = hui_css_try_resolve_var(sheet, atoms, &resolved_ptr, &resolved_len, 0);
+            if (var_status < 0) goto after_push;
+            value_ptr = resolved_ptr;
+            value_len = resolved_len;
 
             hui_decl decl;
             memset(&decl, 0, sizeof(decl));
@@ -443,12 +681,18 @@ int hui_css_parse(hui_stylesheet *sheet, hui_intern *atoms, const char *css, siz
                 else decl.val.data.u32 = 1;
             } else if (name_len == 5 && strncmp(name_ptr, "color", 5) == 0) {
                 decl.id = HUI_DECL_COLOR;
+                int color_ok = 0;
+                uint32_t color = parse_color_value(value_ptr, value_len, &color_ok);
+                if (!color_ok) goto after_push;
                 decl.val.kind = HUI_VAL_COLOR;
-                decl.val.data.u32 = parse_hex_color(value_ptr, value_len);
+                decl.val.data.u32 = color;
             } else if (name_len == 16 && strncmp(name_ptr, "background-color", 16) == 0) {
                 decl.id = HUI_DECL_BG_COLOR;
+                int color_ok = 0;
+                uint32_t color = parse_color_value(value_ptr, value_len, &color_ok);
+                if (!color_ok) goto after_push;
                 decl.val.kind = HUI_VAL_COLOR;
-                decl.val.data.u32 = parse_hex_color(value_ptr, value_len);
+                decl.val.data.u32 = color;
             } else if (name_len == 5 && strncmp(name_ptr, "width", 5) == 0) {
                 decl.id = HUI_DECL_WIDTH;
                 decl.val.kind = HUI_VAL_AUTO;

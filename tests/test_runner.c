@@ -303,6 +303,152 @@ static void test_css_parser_shorthand(void) {
     hui_intern_reset(&atoms);
 }
 
+static void test_css_color_keyword(void) {
+    const char *css = "div { color: red; background-color: teal; }";
+    hui_stylesheet sheet;
+    hui_intern atoms;
+    hui_css_init(&sheet);
+    hui_intern_init(&atoms);
+    ASSERT(hui_css_parse(&sheet, &atoms, css, strlen(css)) == 0);
+    ASSERT(sheet.rules.len == 1);
+    const hui_rule *rule = &sheet.rules.data[0];
+    int color_found = 0;
+    int bg_found = 0;
+    for (size_t di = 0; di < rule->decls.len; di++) {
+        const hui_decl *decl = &rule->decls.data[di];
+        if (decl->id == HUI_DECL_COLOR) {
+            ASSERT(decl->val.kind == HUI_VAL_COLOR);
+            ASSERT(decl->val.data.u32 == 0xFFFF0000u);
+            color_found = 1;
+        } else if (decl->id == HUI_DECL_BG_COLOR) {
+            ASSERT(decl->val.kind == HUI_VAL_COLOR);
+            ASSERT(decl->val.data.u32 == 0xFF008080u);
+            bg_found = 1;
+        }
+    }
+    ASSERT(color_found && bg_found);
+    hui_css_reset(&sheet);
+    hui_intern_reset(&atoms);
+}
+
+static void test_css_variables_basic(void) {
+    const char *css =
+            ":root { --ink: #010203; }\n"
+            "div { color: var(--ink); background-color: var(--ink); }";
+    hui_stylesheet sheet;
+    hui_intern atoms;
+    hui_css_init(&sheet);
+    hui_intern_init(&atoms);
+    ASSERT(hui_css_parse(&sheet, &atoms, css, strlen(css)) == 0);
+    ASSERT(sheet.custom_props.len == 1);
+    const hui_css_custom_prop *prop = &sheet.custom_props.data[0];
+    ASSERT(prop->value != NULL);
+    ASSERT(prop->value_len == 7 && strncmp(prop->value, "#010203", 7) == 0);
+    uint32_t name_len = 0;
+    const char *name = hui_intern_str(&atoms, prop->name, &name_len);
+    ASSERT(name != NULL);
+    ASSERT(name_len == 5 && memcmp(name, "--ink", 5) == 0);
+    int color_found = 0;
+    int bg_found = 0;
+    for (size_t ri = 0; ri < sheet.rules.len; ri++) {
+        const hui_rule *rule = &sheet.rules.data[ri];
+        for (size_t di = 0; di < rule->decls.len; di++) {
+            const hui_decl *decl = &rule->decls.data[di];
+            if (decl->id == HUI_DECL_COLOR) {
+                ASSERT(decl->val.kind == HUI_VAL_COLOR);
+                ASSERT(decl->val.data.u32 == 0xFF010203u);
+                color_found = 1;
+            } else if (decl->id == HUI_DECL_BG_COLOR) {
+                ASSERT(decl->val.kind == HUI_VAL_COLOR);
+                ASSERT(decl->val.data.u32 == 0xFF010203u);
+                bg_found = 1;
+            }
+        }
+    }
+    ASSERT(color_found && bg_found);
+    hui_css_reset(&sheet);
+    hui_intern_reset(&atoms);
+}
+
+static void test_css_variables_fallback_literal(void) {
+    const char *css = "div { color: var(--accent, #112233); }";
+    hui_stylesheet sheet;
+    hui_intern atoms;
+    hui_css_init(&sheet);
+    hui_intern_init(&atoms);
+    ASSERT(hui_css_parse(&sheet, &atoms, css, strlen(css)) == 0);
+    ASSERT(sheet.custom_props.len == 0);
+    int color_found = 0;
+    for (size_t ri = 0; ri < sheet.rules.len; ri++) {
+        const hui_rule *rule = &sheet.rules.data[ri];
+        for (size_t di = 0; di < rule->decls.len; di++) {
+            const hui_decl *decl = &rule->decls.data[di];
+            if (decl->id == HUI_DECL_COLOR) {
+                ASSERT(decl->val.kind == HUI_VAL_COLOR);
+                ASSERT(decl->val.data.u32 == 0xFF112233u);
+                color_found = 1;
+            }
+        }
+    }
+    ASSERT(color_found);
+    hui_css_reset(&sheet);
+    hui_intern_reset(&atoms);
+}
+
+static void test_css_variables_fallback_var(void) {
+    const char *css =
+            ":root { --accent: #445566; }\n"
+            "button { color: var(--accent2, var(--accent)); }";
+    hui_stylesheet sheet;
+    hui_intern atoms;
+    hui_css_init(&sheet);
+    hui_intern_init(&atoms);
+    ASSERT(hui_css_parse(&sheet, &atoms, css, strlen(css)) == 0);
+    ASSERT(sheet.custom_props.len == 1);
+    int color_found = 0;
+    for (size_t ri = 0; ri < sheet.rules.len; ri++) {
+        const hui_rule *rule = &sheet.rules.data[ri];
+        for (size_t di = 0; di < rule->decls.len; di++) {
+            const hui_decl *decl = &rule->decls.data[di];
+            if (decl->id == HUI_DECL_COLOR) {
+                ASSERT(decl->val.kind == HUI_VAL_COLOR);
+                ASSERT(decl->val.data.u32 == 0xFF445566u);
+                color_found = 1;
+            }
+        }
+    }
+    ASSERT(color_found);
+    hui_css_reset(&sheet);
+    hui_intern_reset(&atoms);
+}
+
+static void test_css_variables_missing(void) {
+    const char *css =
+            "div { color: var(--missing); background-color: #010203; }";
+    hui_stylesheet sheet;
+    hui_intern atoms;
+    hui_css_init(&sheet);
+    hui_intern_init(&atoms);
+    ASSERT(hui_css_parse(&sheet, &atoms, css, strlen(css)) == 0);
+    int color_found = 0;
+    int bg_found = 0;
+    for (size_t ri = 0; ri < sheet.rules.len; ri++) {
+        const hui_rule *rule = &sheet.rules.data[ri];
+        for (size_t di = 0; di < rule->decls.len; di++) {
+            const hui_decl *decl = &rule->decls.data[di];
+            if (decl->id == HUI_DECL_COLOR) color_found = 1;
+            if (decl->id == HUI_DECL_BG_COLOR) {
+                ASSERT(decl->val.kind == HUI_VAL_COLOR);
+                ASSERT(decl->val.data.u32 == 0xFF010203u);
+                bg_found = 1;
+            }
+        }
+    }
+    ASSERT(!color_found && bg_found);
+    hui_css_reset(&sheet);
+    hui_intern_reset(&atoms);
+}
+
 static void build_dom_and_style(hui_dom *dom, hui_intern *atoms, hui_stylesheet *sheet, const char *html,
                                 const char *css) {
     hui_builder builder;
@@ -626,6 +772,28 @@ static uint32_t find_rect_color_for_node(hui_ctx *ctx, uint32_t node_index) {
             return cmd->u0;
     }
     return 0;
+}
+
+static void test_css_variables_style(void) {
+    const char *html = "<!doctype html><html><body><button id='btn'>Click</button></body></html>";
+    const char *css =
+            ":root { --accent: red; --ink: #ffffff; --bg: #0d0f12; }\n"
+            "body { background-color: var(--bg); color: var(--ink); }\n"
+            "button { background-color: var(--accent); color: var(--ink); width: 100px; height: 40px; }";
+    hui_ctx *ctx = hui_create(NULL, NULL);
+    ASSERT(ctx != NULL);
+    ASSERT(hui_feed_html(ctx, (hui_bytes){(const uint8_t *) html, strlen(html)}, 1) == HUI_OK);
+    ASSERT(hui_feed_css(ctx, (hui_bytes){(const uint8_t *) css, strlen(css)}, 1) == HUI_OK);
+    ASSERT(hui_parse(ctx) == HUI_OK);
+    hui_build_opts opts = {200.0f, 200.0f, 96.0f, 0};
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    hui_node_handle btn = hui_dom_query_id(ctx, "btn");
+    ASSERT(!hui_node_is_null(btn));
+    uint32_t bg_color = find_rect_color_for_node(ctx, btn.index);
+    ASSERT(bg_color == 0xFFFF0000u);
+
+    hui_destroy(ctx);
 }
 
 static void test_button_text_color(void) {
@@ -1978,6 +2146,11 @@ static const test_case tests[] = {
     {"html_builder", test_html_builder},
     {"css_parser", test_css_parser},
     {"css_parser_shorthand", test_css_parser_shorthand},
+    {"css_color_keyword", test_css_color_keyword},
+    {"css_variables_basic", test_css_variables_basic},
+    {"css_variables_fallback_literal", test_css_variables_fallback_literal},
+    {"css_variables_fallback_var", test_css_variables_fallback_var},
+    {"css_variables_missing", test_css_variables_missing},
     {"style_layout_paint", test_style_layout_paint},
     {"filter_spec", test_filter_spec},
     {"dom_manual_construction", test_dom_manual_construction},
@@ -1985,6 +2158,7 @@ static const test_case tests[] = {
     {"queries", test_queries},
     {"ir_serialization", test_ir_serialization},
     {"button_text_color", test_button_text_color},
+    {"css_variables_style", test_css_variables_style},
     {"input_hover_interaction", test_input_hover_interaction},
     {"font_size_application", test_font_size_application},
     {"font_face_loading", test_font_face_loading},

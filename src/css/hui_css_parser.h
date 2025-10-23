@@ -12,7 +12,8 @@ typedef enum { HUI_COMB_END = 0, HUI_COMB_DESC = 1, HUI_COMB_CHILD = 2 } hui_com
 
 enum {
     HUI_SEL_PSEUDO_NONE = 0,
-    HUI_SEL_PSEUDO_HOVER = 1u << 0
+    HUI_SEL_PSEUDO_HOVER = 1u << 0,
+    HUI_SEL_PSEUDO_ROOT = 1u << 1
 };
 
 typedef struct {
@@ -99,8 +100,15 @@ typedef struct {
 } hui_css_font_face;
 
 typedef struct {
+    hui_atom name;
+    char *value;
+    size_t value_len;
+} hui_css_custom_prop;
+
+typedef struct {
     HUI_VEC(hui_rule) rules;
     HUI_VEC(hui_css_font_face) font_faces;
+    HUI_VEC(hui_css_custom_prop) custom_props;
 } hui_stylesheet;
 
 void hui_css_init(hui_stylesheet *sheet);
