@@ -182,6 +182,127 @@ static void test_css_parser(void) {
     hui_intern_reset(&atoms);
 }
 
+static void test_css_parser_shorthand(void) {
+    const char *css =
+            ".foo:hover > span.bar, #main {"
+            " margin: 1px 2px 3px;"
+            " padding: 4px;"
+            " font-weight: 350;"
+            " font-style: italic;"
+            " font-family: 'Open Sans', sans-serif;"
+            " line-height: 2;"
+            " color: #112233;"
+            " }"
+            "@font-face { font-family: \"Open Sans\"; src: url(fonts/OpenSans.ttf); font-weight: 600; font-style: italic; }"
+            "@font-face { font-family: \"Skip\"; font-weight: 500; }";
+    hui_stylesheet sheet;
+    hui_intern atoms;
+    hui_css_init(&sheet);
+    hui_intern_init(&atoms);
+    ASSERT(hui_css_parse(&sheet, &atoms, css, strlen(css)) == 0);
+    ASSERT(sheet.rules.len == 1);
+    hui_rule *rule = &sheet.rules.data[0];
+    ASSERT(rule->selectors.len == 2);
+    hui_selector *sel0 = &rule->selectors.data[0];
+    ASSERT(sel0->specificity == 31);
+    ASSERT(sel0->steps.len >= 2);
+    const hui_sel_step *bar_step = &sel0->steps.data[0];
+    ASSERT(bar_step->simple.type == HUI_SEL_CLASS);
+    uint32_t atom_len = 0;
+    const char *atom_str = hui_intern_str(&atoms, bar_step->simple.atom, &atom_len);
+    ASSERT(atom_len == 3 && memcmp(atom_str, "bar", 3) == 0);
+    const hui_sel_step *foo_step = &sel0->steps.data[sel0->steps.len - 1];
+    ASSERT(foo_step->simple.type == HUI_SEL_CLASS);
+    atom_str = hui_intern_str(&atoms, foo_step->simple.atom, &atom_len);
+    ASSERT(atom_len == 3 && memcmp(atom_str, "foo", 3) == 0);
+    ASSERT((foo_step->pseudo_mask & HUI_SEL_PSEUDO_HOVER) != 0);
+    ASSERT(foo_step->comb == HUI_COMB_CHILD);
+    hui_selector *sel1 = &rule->selectors.data[1];
+    ASSERT(sel1->specificity == 100);
+    ASSERT(sel1->steps.len == 1);
+    const hui_sel_step *id_step = &sel1->steps.data[0];
+    ASSERT(id_step->simple.type == HUI_SEL_ID);
+    atom_str = hui_intern_str(&atoms, id_step->simple.atom, &atom_len);
+    ASSERT(atom_len == 4 && memcmp(atom_str, "main", 4) == 0);
+    float margin_top = -1.0f, margin_right = -1.0f, margin_bottom = -1.0f, margin_left = -1.0f;
+    float padding_top = -1.0f, padding_right = -1.0f, padding_bottom = -1.0f, padding_left = -1.0f;
+    float font_weight = -1.0f;
+    uint32_t font_style = 0xFFFFFFFFu;
+    hui_atom family_atom = 0;
+    float line_height = -1.0f;
+    uint32_t color = 0;
+    for (size_t i = 0; i < rule->decls.len; i++) {
+        const hui_decl *decl = &rule->decls.data[i];
+        switch (decl->id) {
+            case HUI_DECL_MARGIN_TOP:
+                margin_top = decl->val.data.num;
+                break;
+            case HUI_DECL_MARGIN_RIGHT:
+                margin_right = decl->val.data.num;
+                break;
+            case HUI_DECL_MARGIN_BOTTOM:
+                margin_bottom = decl->val.data.num;
+                break;
+            case HUI_DECL_MARGIN_LEFT:
+                margin_left = decl->val.data.num;
+                break;
+            case HUI_DECL_PADDING_TOP:
+                padding_top = decl->val.data.num;
+                break;
+            case HUI_DECL_PADDING_RIGHT:
+                padding_right = decl->val.data.num;
+                break;
+            case HUI_DECL_PADDING_BOTTOM:
+                padding_bottom = decl->val.data.num;
+                break;
+            case HUI_DECL_PADDING_LEFT:
+                padding_left = decl->val.data.num;
+                break;
+            case HUI_DECL_FONT_WEIGHT:
+                font_weight = decl->val.data.num;
+                break;
+            case HUI_DECL_FONT_STYLE:
+                font_style = decl->val.data.u32;
+                break;
+            case HUI_DECL_FONT_FAMILY:
+                family_atom = decl->val.data.atom;
+                break;
+            case HUI_DECL_LINE_HEIGHT:
+                line_height = decl->val.data.num;
+                break;
+            case HUI_DECL_COLOR:
+                color = decl->val.data.u32;
+                break;
+            default:
+                break;
+        }
+    }
+    ASSERT(fabsf(margin_top - 1.0f) < 0.001f);
+    ASSERT(fabsf(margin_right - 2.0f) < 0.001f);
+    ASSERT(fabsf(margin_bottom - 3.0f) < 0.001f);
+    ASSERT(fabsf(margin_left - 2.0f) < 0.001f);
+    ASSERT(fabsf(padding_top - 4.0f) < 0.001f);
+    ASSERT(fabsf(padding_right - 4.0f) < 0.001f);
+    ASSERT(fabsf(padding_bottom - 4.0f) < 0.001f);
+    ASSERT(fabsf(padding_left - 4.0f) < 0.001f);
+    ASSERT(fabsf(font_weight - 350.0f) < 0.001f);
+    ASSERT(font_style == 1u);
+    atom_str = hui_intern_str(&atoms, family_atom, &atom_len);
+    ASSERT(atom_len == strlen("Open Sans") && memcmp(atom_str, "Open Sans", atom_len) == 0);
+    ASSERT(fabsf(line_height - 2.0f) < 0.001f);
+    ASSERT(color == 0xFF112233u);
+    ASSERT(sheet.font_faces.len == 1);
+    const hui_css_font_face *face = &sheet.font_faces.data[0];
+    ASSERT(face->family_name != NULL && strcmp(face->family_name, "Open Sans") == 0);
+    ASSERT(face->family_atom == family_atom);
+    ASSERT(face->src != NULL && strcmp(face->src, "fonts/OpenSans.ttf") == 0);
+    ASSERT(face->src_len == strlen("fonts/OpenSans.ttf"));
+    ASSERT(face->weight == 600u);
+    ASSERT(face->style == 1u);
+    hui_css_reset(&sheet);
+    hui_intern_reset(&atoms);
+}
+
 static void build_dom_and_style(hui_dom *dom, hui_intern *atoms, hui_stylesheet *sheet, const char *html,
                                 const char *css) {
     hui_builder builder;
@@ -251,6 +372,64 @@ static void test_filter_spec(void) {
 
     hui_dom_reset(&dom);
     hui_intern_reset(&atoms);
+}
+
+static void test_dom_manual_construction(void) {
+    hui_dom_node tmp = {0};
+    tmp.type = HUI_NODE_TEXT;
+    tmp.text = "Hello";
+    tmp.text_len = 5;
+    hui_dom_invalidate_text_cache(&tmp);
+    ASSERT(tmp.text_cache_valid == 0);
+    hui_dom_text_cache_refresh(&tmp);
+    ASSERT(tmp.text_cache_valid);
+    ASSERT(tmp.text_cache_cp == 5);
+    ASSERT(tmp.text_cache_lines == 1);
+    ASSERT(tmp.text_cache_max_cols == 5);
+
+    tmp.text = "Hi\nThere";
+    tmp.text_len = (uint32_t) strlen(tmp.text);
+    hui_dom_invalidate_text_cache(&tmp);
+    hui_dom_text_cache_refresh(&tmp);
+    ASSERT(tmp.text_cache_valid);
+    ASSERT(tmp.text_cache_cp == 8);
+    ASSERT(tmp.text_cache_lines == 2);
+    ASSERT(tmp.text_cache_max_cols == 5);
+
+    hui_ctx *ctx = hui_create(NULL, NULL);
+    ASSERT(ctx != NULL);
+    ASSERT(hui_node_is_null(HUI_NODE_NULL));
+
+    hui_node_handle parent = hui_dom_create_element(ctx, "section");
+    hui_node_handle child = hui_dom_create_text(ctx, "Seed");
+    ASSERT(hui_node_is_element(ctx, parent));
+    ASSERT(hui_node_is_text(ctx, child));
+    ASSERT(hui_dom_append_child(ctx, parent, child) == HUI_OK);
+    hui_node_handle fetched = hui_node_first_child(ctx, parent);
+    ASSERT(!hui_node_is_null(fetched) && fetched.index == child.index);
+    hui_node_handle parent_of_child = hui_node_parent(ctx, child);
+    ASSERT(!hui_node_is_null(parent_of_child) && parent_of_child.index == parent.index);
+
+    ASSERT(hui_dom_set_attr(ctx, parent, "class", "foo bar") == HUI_OK);
+    ASSERT(hui_dom_add_class(ctx, parent, "baz") == HUI_OK);
+    ASSERT(hui_dom_remove_class(ctx, parent, "foo") == HUI_OK);
+
+    hui_node_handle other = hui_dom_create_element(ctx, "aside");
+    ASSERT(hui_dom_append_child(ctx, other, child) == HUI_OK);
+    hui_node_handle new_parent = hui_node_parent(ctx, child);
+    ASSERT(!hui_node_is_null(new_parent) && new_parent.index == other.index);
+    ASSERT(hui_node_is_null(hui_node_first_child(ctx, parent)));
+
+    ASSERT(hui_dom_set_text(ctx, child, "Hi\nThere") == HUI_OK);
+
+    hui_dom_set_text_field_state(ctx, other,
+                                 HUI_NODE_TF_VALUE | HUI_NODE_TF_CARET_VISIBLE,
+                                 3, 1, 2, 5.0f, 9.0f);
+    ASSERT(hui_input_set_focus(ctx, child) == HUI_OK);
+    const hui_input_state *state = hui_input_get_state(ctx);
+    ASSERT(state != NULL && !hui_node_is_null(state->focus) && state->focus.index == child.index);
+
+    hui_destroy(ctx);
 }
 
 static void test_dom_mutations(void) {
@@ -1798,8 +1977,10 @@ static const test_case tests[] = {
     {"intern", test_intern},
     {"html_builder", test_html_builder},
     {"css_parser", test_css_parser},
+    {"css_parser_shorthand", test_css_parser_shorthand},
     {"style_layout_paint", test_style_layout_paint},
     {"filter_spec", test_filter_spec},
+    {"dom_manual_construction", test_dom_manual_construction},
     {"dom_mutations", test_dom_mutations},
     {"queries", test_queries},
     {"ir_serialization", test_ir_serialization},

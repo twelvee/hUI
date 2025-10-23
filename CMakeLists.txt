@@ -54,8 +54,10 @@ set(HUI_TEST_CASES
     intern
     html_builder
     css_parser
+    css_parser_shorthand
     style_layout_paint
     filter_spec
+    dom_manual_construction
     dom_mutations
     queries
     ir_serialization
