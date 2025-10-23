@@ -2759,8 +2759,12 @@ static const hui_computed_style *hui_node_style(const hui_ctx *ctx, hui_node_han
     if (h.index >= ctx->dom.nodes.len) return NULL;
     const hui_dom_node *node = &ctx->dom.nodes.data[h.index];
     if (node->gen != h.gen) return NULL;
-    if (node->style_id >= ctx->styles.styles.len) return NULL;
-    return &ctx->styles.styles.data[node->style_id];
+    uint32_t style_index = node->style_id;
+    if (style_index >= ctx->styles.styles.len || (style_index == 0 && h.index < ctx->styles.styles.len && h.index != 0)) {
+        style_index = h.index;
+    }
+    if (style_index >= ctx->styles.styles.len) return NULL;
+    return &ctx->styles.styles.data[style_index];
 }
 
 float hui_node_font_size(hui_ctx *ctx, hui_node_handle h) {

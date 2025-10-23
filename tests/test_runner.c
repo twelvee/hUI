@@ -70,6 +70,68 @@ typedef struct {
 
 static int current_failed = 0;
 
+#define TEST_FRAME_DT 0.016f
+
+static void push_pointer_move(hui_ctx *ctx, float x, float y) {
+    hui_input_event move = {0};
+    move.type = HUI_INPUT_EVENT_POINTER_MOVE;
+    move.data.pointer_move.x = x;
+    move.data.pointer_move.y = y;
+    ASSERT(hui_push_input(ctx, &move) == HUI_OK);
+}
+
+static void push_pointer_button(hui_ctx *ctx, float x, float y, uint32_t buttons) {
+    hui_input_event evt = {0};
+    evt.type = HUI_INPUT_EVENT_POINTER_BUTTON;
+    evt.data.pointer_button.x = x;
+    evt.data.pointer_button.y = y;
+    evt.data.pointer_button.buttons = buttons;
+    ASSERT(hui_push_input(ctx, &evt) == HUI_OK);
+}
+
+static uint32_t step_text_field(hui_ctx *ctx, hui_text_field *field) {
+    uint32_t dirty = hui_process_input(ctx);
+    dirty |= hui_text_field_step(ctx, field, TEST_FRAME_DT);
+    return dirty;
+}
+
+static float text_field_char_width(hui_ctx *ctx, const hui_text_field *field) {
+    float font_size = hui_node_font_size(ctx, field->text);
+    if (font_size <= 0.0f) font_size = hui_node_font_size(ctx, field->value);
+    if (font_size <= 0.0f) font_size = hui_node_font_size(ctx, field->container);
+    if (font_size <= 0.0f) font_size = 16.0f;
+    return font_size * HUI_TEXT_APPROX_CHAR_ADVANCE;
+}
+
+static float text_field_line_height(hui_ctx *ctx, const hui_text_field *field) {
+    float lh = hui_node_line_height(ctx, field->text);
+    if (lh <= 0.0f) lh = hui_node_line_height(ctx, field->value);
+    if (lh <= 0.0f) lh = hui_node_line_height(ctx, field->container);
+    if (lh <= 0.0f) {
+        float font_size = text_field_char_width(ctx, field) / HUI_TEXT_APPROX_CHAR_ADVANCE;
+        lh = font_size * HUI_TEXT_APPROX_LINE_HEIGHT;
+    }
+    return lh;
+}
+
+static hui_text_field_keymap default_text_field_keymap(void) {
+    hui_text_field_keymap keymap = {
+        .backspace = 8,
+        .select_all = 'A',
+        .copy = 'C',
+        .paste = 'V',
+        .cut = TEST_KEY_CUT,
+        .move_left = TEST_KEY_LEFT,
+        .move_right = TEST_KEY_RIGHT,
+        .move_up = TEST_KEY_UP,
+        .move_down = TEST_KEY_DOWN,
+        .move_home = TEST_KEY_HOME,
+        .move_end = TEST_KEY_END,
+        .delete_forward = TEST_KEY_DELETE
+    };
+    return keymap;
+}
+
 static void test_intern(void) {
     hui_intern intern;
     hui_intern_init(&intern);
@@ -1087,6 +1149,258 @@ static void test_textarea_placeholder_binding(void) {
     hui_destroy(ctx);
 }
 
+static void test_text_field_pointer_caret_single_line(void) {
+    const char *html = "<!doctype html><html><body>"
+                       "<div id='pointer-input' class='input'><span id='pointer-value'></span></div>"
+                       "</body></html>";
+    const char *css = ".input { padding: 4px; border: 1px solid #202020; font-size: 20px; }";
+
+    hui_ctx *ctx = hui_create(NULL, NULL);
+    ASSERT(ctx != NULL);
+    ASSERT(hui_feed_html(ctx, (hui_bytes){(const uint8_t *) html, strlen(html)}, 1) == HUI_OK);
+    ASSERT(hui_feed_css(ctx, (hui_bytes){(const uint8_t *) css, strlen(css)}, 1) == HUI_OK);
+    ASSERT(hui_parse(ctx) == HUI_OK);
+
+    hui_build_opts opts = {240.0f, 160.0f, 96.0f, 0};
+    char buffer[128] = {0};
+    test_clipboard clip;
+    memset(&clip, 0, sizeof(clip));
+    hui_text_field_keymap keymap = default_text_field_keymap();
+    hui_clipboard_iface clipboard = {
+        .get_text = test_clipboard_get,
+        .set_text = test_clipboard_set,
+        .user = &clip
+    };
+
+    hui_text_field field;
+    hui_text_field_desc desc = {
+        .container_id = "pointer-input",
+        .value_id = "pointer-value",
+        .placeholder = "click",
+        .buffer = buffer,
+        .buffer_capacity = sizeof(buffer),
+        .clipboard = &clipboard,
+        .keymap = &keymap
+    };
+
+    ASSERT(hui_text_field_init(ctx, &field, &desc) == HUI_OK);
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    ASSERT(hui_text_field_set_text(ctx, &field, "ABCDEFGHIJ") != 0);
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    hui_rect text_rect;
+    ASSERT(hui_node_get_layout(ctx, field.text, &text_rect) == HUI_OK);
+    float char_width = text_field_char_width(ctx, &field);
+    ASSERT(char_width > 0.0f);
+
+    size_t target_col = 7;
+    float click_x = text_rect.x + char_width * (float) target_col + char_width * 0.4f;
+    float click_y = text_rect.y + text_rect.h * 0.5f;
+
+    push_pointer_move(ctx, click_x, click_y);
+    push_pointer_button(ctx, click_x, click_y, HUI_POINTER_BUTTON_PRIMARY);
+    step_text_field(ctx, &field);
+    push_pointer_button(ctx, click_x, click_y, 0);
+    step_text_field(ctx, &field);
+
+    ASSERT(field.caret == target_col);
+    ASSERT(field.sel_anchor == field.caret);
+
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+    hui_draw_list_view view = hui_get_draw_list(ctx);
+    float expected_caret_x = text_rect.x + char_width * (float) target_col;
+    int caret_found = 0;
+    for (size_t i = 0; i < view.count; i++) {
+        const hui_draw *cmd = &view.items[i];
+        printf("single cmd %zu op=%u u1=%u x=%.2f y=%.2f w=%.2f h=%.2f\n",
+               i, cmd->op, cmd->u1, cmd->f[0], cmd->f[1], cmd->f[2], cmd->f[3]);
+        if (cmd->op != HUI_DRAW_OP_RECT) continue;
+        if (cmd->f[2] > char_width * 0.5f) continue;
+        if (fabsf(cmd->f[0] - expected_caret_x) <= char_width * 0.25f) {
+            caret_found = 1;
+            break;
+        }
+    }
+    ASSERT(caret_found);
+
+    hui_destroy(ctx);
+}
+
+static void test_text_field_pointer_drag_selection(void) {
+    const char *html = "<!doctype html><html><body>"
+                       "<div id='drag-input' class='input'><span id='drag-value'></span></div>"
+                       "</body></html>";
+    const char *css = ".input { padding: 4px; border: 1px solid #202020; font-size: 20px; }";
+
+    hui_ctx *ctx = hui_create(NULL, NULL);
+    ASSERT(ctx != NULL);
+    ASSERT(hui_feed_html(ctx, (hui_bytes){(const uint8_t *) html, strlen(html)}, 1) == HUI_OK);
+    ASSERT(hui_feed_css(ctx, (hui_bytes){(const uint8_t *) css, strlen(css)}, 1) == HUI_OK);
+    ASSERT(hui_parse(ctx) == HUI_OK);
+
+    hui_build_opts opts = {240.0f, 160.0f, 96.0f, 0};
+    char buffer[128] = {0};
+    test_clipboard clip;
+    memset(&clip, 0, sizeof(clip));
+    hui_text_field_keymap keymap = default_text_field_keymap();
+    hui_clipboard_iface clipboard = {
+        .get_text = test_clipboard_get,
+        .set_text = test_clipboard_set,
+        .user = &clip
+    };
+
+    hui_text_field field;
+    hui_text_field_desc desc = {
+        .container_id = "drag-input",
+        .value_id = "drag-value",
+        .placeholder = "drag",
+        .buffer = buffer,
+        .buffer_capacity = sizeof(buffer),
+        .clipboard = &clipboard,
+        .keymap = &keymap
+    };
+
+    ASSERT(hui_text_field_init(ctx, &field, &desc) == HUI_OK);
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    ASSERT(hui_text_field_set_text(ctx, &field, "ABCDEFGHIJKLMN") != 0);
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    hui_rect text_rect;
+    ASSERT(hui_node_get_layout(ctx, field.text, &text_rect) == HUI_OK);
+    float char_width = text_field_char_width(ctx, &field);
+    ASSERT(char_width > 0.0f);
+
+    size_t start_col = 2;
+    size_t end_col = 9;
+    float start_x = text_rect.x + char_width * (float) start_col + char_width * 0.1f;
+    float end_x = text_rect.x + char_width * (float) end_col + char_width * 0.4f;
+    float pointer_y = text_rect.y + text_rect.h * 0.5f;
+
+    push_pointer_move(ctx, start_x, pointer_y);
+    push_pointer_button(ctx, start_x, pointer_y, HUI_POINTER_BUTTON_PRIMARY);
+    step_text_field(ctx, &field);
+
+    push_pointer_move(ctx, end_x, pointer_y);
+    step_text_field(ctx, &field);
+
+    push_pointer_button(ctx, end_x, pointer_y, 0);
+    step_text_field(ctx, &field);
+
+    ASSERT(field.sel_anchor == start_col);
+    ASSERT(field.caret == end_col);
+    size_t sel_start = field.sel_anchor < field.caret ? field.sel_anchor : field.caret;
+    size_t sel_end = field.sel_anchor > field.caret ? field.sel_anchor : field.caret;
+    ASSERT(sel_start == start_col);
+    ASSERT(sel_end == end_col);
+
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+    hui_draw_list_view view = hui_get_draw_list(ctx);
+    float expected_width = char_width * (float) (end_col - start_col);
+    float width_tolerance = char_width * 0.6f;
+    int highlight_found = 0;
+    for (size_t i = 0; i < view.count; i++) {
+        const hui_draw *cmd = &view.items[i];
+        if (cmd->op != HUI_DRAW_OP_RECT) continue;
+        if (cmd->u1 != field.text.index) continue;
+        if (cmd->f[2] <= char_width * 0.5f) continue;
+        if (fabsf(cmd->f[2] - expected_width) <= width_tolerance) {
+            highlight_found = 1;
+            break;
+        }
+    }
+    ASSERT(highlight_found);
+
+    hui_destroy(ctx);
+}
+
+static void test_text_field_pointer_caret_multiline(void) {
+    const char *html = "<!doctype html><html><body>"
+                       "<div id='multi-input' class='input'><span id='multi-value'></span></div>"
+                       "</body></html>";
+    const char *css = ".input { padding: 4px; border: 1px solid #202020; font-size: 20px; min-height: 96px; }";
+
+    hui_ctx *ctx = hui_create(NULL, NULL);
+    ASSERT(ctx != NULL);
+    ASSERT(hui_feed_html(ctx, (hui_bytes){(const uint8_t *) html, strlen(html)}, 1) == HUI_OK);
+    ASSERT(hui_feed_css(ctx, (hui_bytes){(const uint8_t *) css, strlen(css)}, 1) == HUI_OK);
+    ASSERT(hui_parse(ctx) == HUI_OK);
+
+    hui_build_opts opts = {320.0f, 220.0f, 96.0f, 0};
+    char buffer[256] = {0};
+    test_clipboard clip;
+    memset(&clip, 0, sizeof(clip));
+    hui_text_field_keymap keymap = default_text_field_keymap();
+    hui_clipboard_iface clipboard = {
+        .get_text = test_clipboard_get,
+        .set_text = test_clipboard_set,
+        .user = &clip
+    };
+
+    hui_text_field field;
+    hui_text_field_desc desc = {
+        .container_id = "multi-input",
+        .value_id = "multi-value",
+        .placeholder = "multi",
+        .buffer = buffer,
+        .buffer_capacity = sizeof(buffer),
+        .clipboard = &clipboard,
+        .keymap = &keymap,
+        .flags = HUI_TEXT_FIELD_FLAG_MULTI_LINE
+    };
+
+    ASSERT(hui_text_field_init(ctx, &field, &desc) == HUI_OK);
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    const char *content = "Alpha\nSecondLine\nThird";
+    ASSERT(hui_text_field_set_text(ctx, &field, content) != 0);
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    hui_rect text_rect;
+    ASSERT(hui_node_get_layout(ctx, field.text, &text_rect) == HUI_OK);
+    float char_width = text_field_char_width(ctx, &field);
+    float line_height = text_field_line_height(ctx, &field);
+    ASSERT(char_width > 0.0f);
+    ASSERT(line_height > 0.0f);
+
+    size_t first_break = (size_t) (strchr(content, '\n') - content);
+    size_t second_line_start = first_break + 1;
+    size_t target_col = 3;
+    size_t expected_offset = second_line_start + target_col;
+
+    float click_x = text_rect.x + char_width * (float) target_col + char_width * 0.35f;
+    float click_y = text_rect.y + line_height * 1.0f + line_height * 0.5f;
+
+    push_pointer_move(ctx, click_x, click_y);
+    push_pointer_button(ctx, click_x, click_y, HUI_POINTER_BUTTON_PRIMARY);
+    step_text_field(ctx, &field);
+    push_pointer_button(ctx, click_x, click_y, 0);
+    step_text_field(ctx, &field);
+
+    ASSERT(field.caret == expected_offset);
+    ASSERT(field.sel_anchor == field.caret);
+
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+    hui_draw_list_view view = hui_get_draw_list(ctx);
+    float expected_caret_x = text_rect.x + char_width * (float) target_col;
+    float expected_caret_y = text_rect.y + line_height * 1.0f;
+    int caret_found = 0;
+    for (size_t i = 0; i < view.count; i++) {
+        const hui_draw *cmd = &view.items[i];
+        if (cmd->op != HUI_DRAW_OP_RECT) continue;
+        if (cmd->f[2] > char_width * 0.5f) continue;
+        if (fabsf(cmd->f[0] - expected_caret_x) <= char_width * 0.35f &&
+            fabsf(cmd->f[1] - expected_caret_y) <= line_height * 0.25f) {
+            caret_found = 1;
+            break;
+        }
+    }
+    ASSERT(caret_found);
+
+    hui_destroy(ctx);
+}
+
 static void test_text_field_scroll(void) {
     const char *html = "<!doctype html><html><body>"
                        "<div id='scroll-input' class='input'><span id='scroll-value'></span></div>"
@@ -1494,6 +1808,9 @@ static const test_case tests[] = {
     {"font_size_application", test_font_size_application},
     {"font_face_loading", test_font_face_loading},
     {"text_field_interaction", test_text_field_interaction},
+    {"text_field_pointer_caret_single_line", test_text_field_pointer_caret_single_line},
+    {"text_field_pointer_drag_selection", test_text_field_pointer_drag_selection},
+    {"text_field_pointer_caret_multiline", test_text_field_pointer_caret_multiline},
     {"text_field_scroll", test_text_field_scroll},
     {"textarea_multiline", test_textarea_multiline},
     {"textarea_min_height", test_textarea_min_height},
