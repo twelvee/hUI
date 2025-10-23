@@ -774,6 +774,20 @@ static uint32_t find_rect_color_for_node(hui_ctx *ctx, uint32_t node_index) {
     return 0;
 }
 
+static uint32_t find_node_by_id(const hui_dom *dom, const hui_intern *atoms, const char *id) {
+    if (!dom || !atoms || !id) return 0xFFFFFFFFu;
+    size_t target_len = strlen(id);
+    for (size_t i = 0; i < dom->nodes.len; i++) {
+        hui_atom atom = dom->nodes.data[i].id;
+        if (!atom) continue;
+        uint32_t len = 0;
+        const char *str = hui_intern_str(atoms, atom, &len);
+        if (len == target_len && (len == 0 || memcmp(str, id, len) == 0))
+            return (uint32_t) i;
+    }
+    return 0xFFFFFFFFu;
+}
+
 static void test_css_variables_style(void) {
     const char *html = "<!doctype html><html><body><button id='btn'>Click</button></body></html>";
     const char *css =
@@ -794,6 +808,117 @@ static void test_css_variables_style(void) {
     ASSERT(bg_color == 0xFFFF0000u);
 
     hui_destroy(ctx);
+}
+
+static void test_flex_layout_row(void) {
+    const char *html = "<div id='root'><div id='left'>Left</div><div id='right'>Right</div></div>";
+    const char *css =
+            "#root { display: flex; width: 600px; padding: 0px; }\n"
+            "#left { flex: 1; }\n"
+            "#right { flex: 2; }\n";
+    hui_dom dom;
+    hui_intern atoms;
+    hui_stylesheet sheet;
+    build_dom_and_style(&dom, &atoms, &sheet, html, css);
+    hui_style_store store;
+    hui_style_store_init(&store);
+    hui_apply_styles(&store, &dom, &atoms, &sheet, HUI_PROP_ALL);
+    uint32_t root_idx = find_node_by_id(&dom, &atoms, "root");
+    ASSERT(root_idx != 0xFFFFFFFFu);
+    const hui_computed_style *root_cs = &store.styles.data[root_idx];
+    ASSERT(root_cs->display == HUI_DISPLAY_FLEX);
+    ASSERT(root_cs->flex_direction == HUI_FLEX_DIRECTION_ROW);
+    hui_layout_opts opts = {600.0f, 400.0f, 96.0f};
+    hui_layout_run(&dom, &store, &opts);
+
+    uint32_t left_idx = find_node_by_id(&dom, &atoms, "left");
+    uint32_t right_idx = find_node_by_id(&dom, &atoms, "right");
+    ASSERT(left_idx != 0xFFFFFFFFu && right_idx != 0xFFFFFFFFu);
+
+    hui_dom_node *left = &dom.nodes.data[left_idx];
+    hui_dom_node *right = &dom.nodes.data[right_idx];
+    float expected_left = 600.0f / 3.0f;
+    float expected_right = expected_left * 2.0f;
+    ASSERT(fabsf(left->w - expected_left) < 1.5f);
+    ASSERT(fabsf(right->w - expected_right) < 1.5f);
+    ASSERT(fabsf(right->x - left->w) < 1.5f);
+    ASSERT(fabsf(left->y) < 0.5f);
+    ASSERT(fabsf(right->y) < 0.5f);
+
+    hui_style_store_release(&store);
+    hui_css_reset(&sheet);
+    hui_dom_reset(&dom);
+    hui_intern_reset(&atoms);
+}
+
+static void test_flex_layout_column(void) {
+    const char *html = "<div id='root'><div id='top'>Top</div><div id='bottom'>Bottom</div></div>";
+    const char *css =
+            "#root { display: flex; flex-direction: column; height: 300px; width: 200px; padding: 0px; justify-content: space-between; align-items: center; }\n"
+            "#root > div { width: 100px; height: 40px; }\n";
+    hui_dom dom;
+    hui_intern atoms;
+    hui_stylesheet sheet;
+    build_dom_and_style(&dom, &atoms, &sheet, html, css);
+    hui_style_store store;
+    hui_style_store_init(&store);
+    hui_apply_styles(&store, &dom, &atoms, &sheet, HUI_PROP_ALL);
+    uint32_t root_idx = find_node_by_id(&dom, &atoms, "root");
+    ASSERT(root_idx != 0xFFFFFFFFu);
+    const hui_computed_style *root_cs = &store.styles.data[root_idx];
+    ASSERT(root_cs->display == HUI_DISPLAY_FLEX);
+    ASSERT(root_cs->flex_direction == HUI_FLEX_DIRECTION_COLUMN);
+    hui_layout_opts opts = {200.0f, 400.0f, 96.0f};
+    hui_layout_run(&dom, &store, &opts);
+
+    uint32_t top_idx = find_node_by_id(&dom, &atoms, "top");
+    uint32_t bottom_idx = find_node_by_id(&dom, &atoms, "bottom");
+    ASSERT(top_idx != 0xFFFFFFFFu && bottom_idx != 0xFFFFFFFFu);
+
+    hui_dom_node *top = &dom.nodes.data[top_idx];
+    hui_dom_node *bottom = &dom.nodes.data[bottom_idx];
+    ASSERT(fabsf(top->y) < 0.5f);
+    ASSERT(fabsf(top->x - 50.0f) < 1.5f);
+    ASSERT(fabsf(bottom->y - 260.0f) < 1.5f);
+    ASSERT(fabsf(bottom->x - 50.0f) < 1.5f);
+
+    hui_style_store_release(&store);
+    hui_css_reset(&sheet);
+    hui_dom_reset(&dom);
+    hui_intern_reset(&atoms);
+}
+
+static void test_flex_align_self(void) {
+    const char *html = "<div id='root'><div id='first'>First</div><div id='second'>Second</div></div>";
+    const char *css =
+            "#root { display: flex; width: 240px; height: 120px; padding: 0px; align-items: flex-start; }\n"
+            "#root > div { width: 60px; height: 40px; }\n"
+            "#second { align-self: flex-end; }\n";
+    hui_dom dom;
+    hui_intern atoms;
+    hui_stylesheet sheet;
+    build_dom_and_style(&dom, &atoms, &sheet, html, css);
+    hui_style_store store;
+    hui_style_store_init(&store);
+    hui_apply_styles(&store, &dom, &atoms, &sheet, HUI_PROP_ALL);
+    hui_layout_opts opts = {240.0f, 200.0f, 96.0f};
+    hui_layout_run(&dom, &store, &opts);
+
+    uint32_t first_idx = find_node_by_id(&dom, &atoms, "first");
+    uint32_t second_idx = find_node_by_id(&dom, &atoms, "second");
+    ASSERT(first_idx != 0xFFFFFFFFu && second_idx != 0xFFFFFFFFu);
+
+    hui_dom_node *first = &dom.nodes.data[first_idx];
+    hui_dom_node *second = &dom.nodes.data[second_idx];
+    ASSERT(fabsf(first->y) < 0.5f);
+    ASSERT(fabsf(second->y - 80.0f) < 1.5f);
+    ASSERT(fabsf(first->x) < 0.5f);
+    ASSERT(fabsf(second->x - 60.0f) < 1.5f);
+
+    hui_style_store_release(&store);
+    hui_css_reset(&sheet);
+    hui_dom_reset(&dom);
+    hui_intern_reset(&atoms);
 }
 
 static void test_button_text_color(void) {
@@ -2157,8 +2282,11 @@ static const test_case tests[] = {
     {"dom_mutations", test_dom_mutations},
     {"queries", test_queries},
     {"ir_serialization", test_ir_serialization},
-    {"button_text_color", test_button_text_color},
     {"css_variables_style", test_css_variables_style},
+    {"flex_layout_row", test_flex_layout_row},
+    {"flex_layout_column", test_flex_layout_column},
+    {"flex_align_self", test_flex_align_self},
+    {"button_text_color", test_button_text_color},
     {"input_hover_interaction", test_input_hover_interaction},
     {"font_size_application", test_font_size_application},
     {"font_face_loading", test_font_face_loading},

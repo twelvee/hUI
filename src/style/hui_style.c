@@ -202,6 +202,13 @@ void hui_apply_styles(hui_style_store *store, hui_dom *dom, hui_intern *atoms, c
         cs->font_id = HUI_FONT_ID_NONE;
         cs->color = 0xFF000000u;
         cs->bg_color = 0x00000000u;
+        cs->flex_direction = HUI_FLEX_DIRECTION_ROW;
+        cs->justify_content = HUI_FLEX_JUSTIFY_FLEX_START;
+        cs->align_items = HUI_FLEX_ALIGN_STRETCH;
+        cs->align_self = HUI_FLEX_ALIGN_AUTO;
+        cs->flex_grow = 0.0f;
+        cs->flex_shrink = 1.0f;
+        cs->flex_basis = -1.0f;
     }
 
     HUI_VEC(uint32_t) all_elements;
@@ -339,6 +346,39 @@ void hui_apply_styles(hui_style_store *store, hui_dom *dom, hui_intern *atoms, c
                         }
                         cs->present_mask |= HUI_STYLE_PRESENT_LINE_HEIGHT;
                         break;
+                    case HUI_DECL_FLEX_DIRECTION:
+                        cs->flex_direction = decl->val.data.u32;
+                        cs->present_mask |= HUI_STYLE_PRESENT_FLEX_DIRECTION;
+                        break;
+                    case HUI_DECL_JUSTIFY_CONTENT:
+                        cs->justify_content = decl->val.data.u32;
+                        cs->present_mask |= HUI_STYLE_PRESENT_JUSTIFY_CONTENT;
+                        break;
+                    case HUI_DECL_ALIGN_ITEMS:
+                        cs->align_items = decl->val.data.u32;
+                        cs->present_mask |= HUI_STYLE_PRESENT_ALIGN_ITEMS;
+                        break;
+                    case HUI_DECL_FLEX_GROW:
+                        cs->flex_grow = decl->val.data.num;
+                        if (cs->flex_grow < 0.0f) cs->flex_grow = 0.0f;
+                        cs->present_mask |= HUI_STYLE_PRESENT_FLEX_GROW;
+                        break;
+                    case HUI_DECL_FLEX_SHRINK:
+                        cs->flex_shrink = decl->val.data.num;
+                        if (cs->flex_shrink < 0.0f) cs->flex_shrink = 0.0f;
+                        cs->present_mask |= HUI_STYLE_PRESENT_FLEX_SHRINK;
+                        break;
+                    case HUI_DECL_FLEX_BASIS:
+                        if (decl->val.kind == HUI_VAL_ENUM)
+                            cs->flex_basis = -1.0f;
+                        else
+                            cs->flex_basis = decl->val.data.num;
+                        cs->present_mask |= HUI_STYLE_PRESENT_FLEX_BASIS;
+                        break;
+                    case HUI_DECL_ALIGN_SELF:
+                        cs->align_self = decl->val.data.u32;
+                        cs->present_mask |= HUI_STYLE_PRESENT_ALIGN_SELF;
+                        break;
                     default: break;
                 }
             }
@@ -365,5 +405,6 @@ void hui_apply_styles(hui_style_store *store, hui_dom *dom, hui_intern *atoms, c
         if (!(cs->present_mask & HUI_STYLE_PRESENT_FONT_STYLE)) cs->font_style = parent->font_style;
         if (!(cs->present_mask & HUI_STYLE_PRESENT_FONT_FAMILY)) cs->font_family = parent->font_family;
         if (!(cs->present_mask & HUI_STYLE_PRESENT_LINE_HEIGHT)) cs->line_height = parent->line_height;
+        if (!(cs->present_mask & HUI_STYLE_PRESENT_ALIGN_SELF)) cs->align_self = HUI_FLEX_ALIGN_AUTO;
     }
 }

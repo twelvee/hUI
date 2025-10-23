@@ -390,6 +390,79 @@ static uint32_t parse_color_value(const char *s, size_t n, int *ok) {
     return 0;
 }
 
+static int parse_flex_direction_value(const char *s, size_t n, uint32_t *out) {
+    const char *ptr = s;
+    size_t len = n;
+    trim_ws(&ptr, &len);
+    if (len == 3 && strncmp(ptr, "row", 3) == 0) {
+        if (out) *out = HUI_FLEX_DIRECTION_ROW;
+        return 0;
+    }
+    if (len == 6 && strncmp(ptr, "column", 6) == 0) {
+        if (out) *out = HUI_FLEX_DIRECTION_COLUMN;
+        return 0;
+    }
+    return -1;
+}
+
+static int parse_justify_content_value(const char *s, size_t n, uint32_t *out) {
+    const char *ptr = s;
+    size_t len = n;
+    trim_ws(&ptr, &len);
+    if (len == 10 && strncmp(ptr, "flex-start", 10) == 0) {
+        if (out) *out = HUI_FLEX_JUSTIFY_FLEX_START;
+        return 0;
+    }
+    if (len == 8 && strncmp(ptr, "flex-end", 8) == 0) {
+        if (out) *out = HUI_FLEX_JUSTIFY_FLEX_END;
+        return 0;
+    }
+    if (len == 6 && strncmp(ptr, "center", 6) == 0) {
+        if (out) *out = HUI_FLEX_JUSTIFY_CENTER;
+        return 0;
+    }
+    if (len == 13 && strncmp(ptr, "space-between", 13) == 0) {
+        if (out) *out = HUI_FLEX_JUSTIFY_SPACE_BETWEEN;
+        return 0;
+    }
+    if (len == 12 && strncmp(ptr, "space-around", 12) == 0) {
+        if (out) *out = HUI_FLEX_JUSTIFY_SPACE_AROUND;
+        return 0;
+    }
+    if (len == 12 && strncmp(ptr, "space-evenly", 12) == 0) {
+        if (out) *out = HUI_FLEX_JUSTIFY_SPACE_EVENLY;
+        return 0;
+    }
+    return -1;
+}
+
+static int parse_align_value(const char *s, size_t n, uint32_t *out, int allow_auto) {
+    const char *ptr = s;
+    size_t len = n;
+    trim_ws(&ptr, &len);
+    if (allow_auto && len == 4 && strncmp(ptr, "auto", 4) == 0) {
+        if (out) *out = HUI_FLEX_ALIGN_AUTO;
+        return 0;
+    }
+    if (len == 10 && strncmp(ptr, "flex-start", 10) == 0) {
+        if (out) *out = HUI_FLEX_ALIGN_FLEX_START;
+        return 0;
+    }
+    if (len == 8 && strncmp(ptr, "flex-end", 8) == 0) {
+        if (out) *out = HUI_FLEX_ALIGN_FLEX_END;
+        return 0;
+    }
+    if (len == 6 && strncmp(ptr, "center", 6) == 0) {
+        if (out) *out = HUI_FLEX_ALIGN_CENTER;
+        return 0;
+    }
+    if (len == 7 && strncmp(ptr, "stretch", 7) == 0) {
+        if (out) *out = HUI_FLEX_ALIGN_STRETCH;
+        return 0;
+    }
+    return -1;
+}
+
 static hui_selector parse_selector(hui_intern *atoms, const char *css, size_t n, size_t *i) {
     hui_selector sel;
     hui_vec_init(&sel.steps);
@@ -676,9 +749,10 @@ int hui_css_parse(hui_stylesheet *sheet, hui_intern *atoms, const char *css, siz
             if (name_len == 7 && strncmp(name_ptr, "display", 7) == 0) {
                 decl.id = HUI_DECL_DISPLAY;
                 decl.val.kind = HUI_VAL_ENUM;
-                if (value_len == 5 && strncmp(value_ptr, "block", 5) == 0) decl.val.data.u32 = 1;
-                else if (value_len == 6 && strncmp(value_ptr, "inline", 6) == 0) decl.val.data.u32 = 2;
-                else decl.val.data.u32 = 1;
+                if (value_len == 4 && strncmp(value_ptr, "flex", 4) == 0) decl.val.data.u32 = HUI_DISPLAY_FLEX;
+                else if (value_len == 4 && strncmp(value_ptr, "none", 4) == 0) decl.val.data.u32 = HUI_DISPLAY_NONE;
+                else if (value_len == 6 && strncmp(value_ptr, "inline", 6) == 0) decl.val.data.u32 = HUI_DISPLAY_INLINE;
+                else decl.val.data.u32 = HUI_DISPLAY_BLOCK;
             } else if (name_len == 5 && strncmp(name_ptr, "color", 5) == 0) {
                 decl.id = HUI_DECL_COLOR;
                 int color_ok = 0;
@@ -785,6 +859,133 @@ int hui_css_parse(hui_stylesheet *sheet, hui_intern *atoms, const char *css, siz
                     decl.val.kind = HUI_VAL_NUMBER;
                     decl.val.data.num = parse_float_token(value_ptr, value_len);
                 }
+            } else if (name_len == 14 && strncmp(name_ptr, "flex-direction", 14) == 0) {
+                uint32_t dir = 0;
+                if (parse_flex_direction_value(value_ptr, value_len, &dir) != 0) goto after_push;
+                decl.id = HUI_DECL_FLEX_DIRECTION;
+                decl.val.kind = HUI_VAL_ENUM;
+                decl.val.data.u32 = dir;
+            } else if (name_len == 15 && strncmp(name_ptr, "justify-content", 15) == 0) {
+                uint32_t jc = 0;
+                if (parse_justify_content_value(value_ptr, value_len, &jc) != 0) goto after_push;
+                decl.id = HUI_DECL_JUSTIFY_CONTENT;
+                decl.val.kind = HUI_VAL_ENUM;
+                decl.val.data.u32 = jc;
+            } else if (name_len == 11 && strncmp(name_ptr, "align-items", 11) == 0) {
+                uint32_t align = 0;
+                if (parse_align_value(value_ptr, value_len, &align, 0) != 0) goto after_push;
+                decl.id = HUI_DECL_ALIGN_ITEMS;
+                decl.val.kind = HUI_VAL_ENUM;
+                decl.val.data.u32 = align;
+            } else if (name_len == 9 && strncmp(name_ptr, "flex-grow", 9) == 0) {
+                decl.id = HUI_DECL_FLEX_GROW;
+                decl.val.kind = HUI_VAL_NUMBER;
+                decl.val.data.num = parse_float_token(value_ptr, value_len);
+                if (decl.val.data.num < 0.0f) decl.val.data.num = 0.0f;
+            } else if (name_len == 11 && strncmp(name_ptr, "flex-shrink", 11) == 0) {
+                decl.id = HUI_DECL_FLEX_SHRINK;
+                decl.val.kind = HUI_VAL_NUMBER;
+                decl.val.data.num = parse_float_token(value_ptr, value_len);
+                if (decl.val.data.num < 0.0f) decl.val.data.num = 0.0f;
+            } else if (name_len == 10 && strncmp(name_ptr, "flex-basis", 10) == 0) {
+                const char *bp = value_ptr;
+                size_t bl = value_len;
+                trim_ws(&bp, &bl);
+                decl.id = HUI_DECL_FLEX_BASIS;
+                if (bl == 4 && strncmp(bp, "auto", 4) == 0) {
+                    decl.val.kind = HUI_VAL_ENUM;
+                    decl.val.data.u32 = 0;
+                } else if (bl > 2 && strncmp(bp + bl - 2, "px", 2) == 0) {
+                    decl.val.kind = HUI_VAL_NUMBER;
+                    decl.val.data.num = parse_float_token(bp, bl - 2);
+                } else {
+                    decl.val.kind = HUI_VAL_NUMBER;
+                    decl.val.data.num = parse_float_token(bp, bl);
+                }
+            } else if (name_len == 4 && strncmp(name_ptr, "flex", 4) == 0) {
+                float grow = 0.0f;
+                float shrink = 1.0f;
+                float basis = -1.0f;
+                int basis_auto = 1;
+                const char *fp = value_ptr;
+                size_t fl = value_len;
+                trim_ws(&fp, &fl);
+                if (fl == 4 && strncmp(fp, "none", 4) == 0) {
+                    grow = 0.0f;
+                    shrink = 0.0f;
+                    basis = -1.0f;
+                    basis_auto = 1;
+                } else if (fl == 4 && strncmp(fp, "auto", 4) == 0) {
+                    grow = 1.0f;
+                    shrink = 1.0f;
+                    basis = -1.0f;
+                    basis_auto = 1;
+                } else {
+                    size_t pos = 0;
+                    float first_number = 0.0f;
+                    float second_number = 1.0f;
+                    size_t number_count = 0;
+                    float basis_value = -1.0f;
+                    int basis_set = 0;
+                    while (pos < fl) {
+                        while (pos < fl && isspace((unsigned char) fp[pos])) pos++;
+                        if (pos >= fl) break;
+                        size_t start = pos;
+                        while (pos < fl && !isspace((unsigned char) fp[pos])) pos++;
+                        size_t tok_len = pos - start;
+                        if (tok_len == 0) continue;
+                        const char *tok = fp + start;
+                        if (tok_len == 4 && strncmp(tok, "auto", 4) == 0) {
+                            basis = -1.0f;
+                            basis_auto = 1;
+                        } else if (tok_len > 2 && strncmp(tok + tok_len - 2, "px", 2) == 0) {
+                            basis = parse_float_token(tok, tok_len - 2);
+                            basis_auto = 0;
+                            basis_set = 1;
+                        } else {
+                            float num = parse_float_token(tok, tok_len);
+                            if (number_count == 0) {
+                                first_number = num;
+                                number_count = 1;
+                            } else if (number_count == 1) {
+                                second_number = num;
+                                number_count = 2;
+                            } else if (!basis_set) {
+                                basis_value = num;
+                                basis_set = 1;
+                            }
+                        }
+                    }
+                    if (number_count >= 1) grow = first_number;
+                    if (number_count >= 2) shrink = second_number;
+                    if (basis_set) {
+                        basis = basis_value;
+                        basis_auto = 0;
+                    }
+                }
+                decl.id = HUI_DECL_FLEX_GROW;
+                decl.val.kind = HUI_VAL_NUMBER;
+                decl.val.data.num = (grow < 0.0f) ? 0.0f : grow;
+                hui_vec_push(&rule.decls, decl);
+                decl.id = HUI_DECL_FLEX_SHRINK;
+                decl.val.data.num = (shrink < 0.0f) ? 0.0f : shrink;
+                hui_vec_push(&rule.decls, decl);
+                decl.id = HUI_DECL_FLEX_BASIS;
+                if (basis_auto) {
+                    decl.val.kind = HUI_VAL_ENUM;
+                    decl.val.data.u32 = 0;
+                } else {
+                    decl.val.kind = HUI_VAL_NUMBER;
+                    decl.val.data.num = basis;
+                }
+                hui_vec_push(&rule.decls, decl);
+                goto after_push;
+            } else if (name_len == 10 && strncmp(name_ptr, "align-self", 10) == 0) {
+                uint32_t align = 0;
+                if (parse_align_value(value_ptr, value_len, &align, 1) != 0) goto after_push;
+                decl.id = HUI_DECL_ALIGN_SELF;
+                decl.val.kind = HUI_VAL_ENUM;
+                decl.val.data.u32 = align;
             } else {
                 decl.id = 0;
             }

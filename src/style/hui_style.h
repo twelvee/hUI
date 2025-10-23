@@ -21,6 +21,13 @@ typedef struct {
     float line_height;
     hui_atom font_family;
     uint32_t font_id;
+    uint32_t flex_direction;
+    uint32_t justify_content;
+    uint32_t align_items;
+    uint32_t align_self;
+    float flex_grow;
+    float flex_shrink;
+    float flex_basis;
 } hui_computed_style;
 
 typedef struct {
@@ -40,7 +47,14 @@ enum {
     HUI_STYLE_PRESENT_FONT_STYLE = 1u << 9,
     HUI_STYLE_PRESENT_FONT_FAMILY = 1u << 10,
     HUI_STYLE_PRESENT_LINE_HEIGHT = 1u << 11,
-    HUI_STYLE_PRESENT_MIN_HEIGHT = 1u << 12
+    HUI_STYLE_PRESENT_MIN_HEIGHT = 1u << 12,
+    HUI_STYLE_PRESENT_FLEX_DIRECTION = 1u << 13,
+    HUI_STYLE_PRESENT_JUSTIFY_CONTENT = 1u << 14,
+    HUI_STYLE_PRESENT_ALIGN_ITEMS = 1u << 15,
+    HUI_STYLE_PRESENT_FLEX_GROW = 1u << 16,
+    HUI_STYLE_PRESENT_FLEX_SHRINK = 1u << 17,
+    HUI_STYLE_PRESENT_FLEX_BASIS = 1u << 18,
+    HUI_STYLE_PRESENT_ALIGN_SELF = 1u << 19
 };
 
 void hui_style_store_init(hui_style_store *store);
