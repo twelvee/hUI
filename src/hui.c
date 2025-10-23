@@ -64,13 +64,20 @@ typedef struct {
 
 typedef struct {
     uint32_t node_index;
-    char *template_str;
+   char *template_str;
     size_t template_len;
     char *rendered;
     size_t rendered_len;
     size_t rendered_cap;
     HUI_VEC(hui_bound_text_token) tokens;
 } hui_bound_text_template;
+
+typedef struct {
+    hui_font_resource resource;
+    hui_atom family_atom;
+    char *src_path;
+    hui_font_id id;
+} hui_font_entry;
 
 static void hui_auto_text_fields_reset(hui_ctx *ctx);
 
@@ -150,6 +157,45 @@ static uint32_t hui_hit_test_subtree(const hui_ctx *ctx, uint32_t idx, float x, 
 
 static uint32_t hui_hit_test_siblings(const hui_ctx *ctx, uint32_t idx, float x, float y);
 
+static int hui_path_is_absolute(const char *path) {
+    if (!path || !path[0]) return 0;
+#ifdef _WIN32
+    if ((path[0] == '\\' && path[1] == '\\') || (path[0] == '/' && path[1] == '/'))
+        return 1;
+    if (isalpha((unsigned char) path[0]) && path[1] == ':')
+        return 1;
+#else
+    if (path[0] == '/')
+        return 1;
+#endif
+    return 0;
+}
+
+static FILE *hui_open_asset_stream(const char *base_dir, const char *path) {
+    if (!path || !path[0]) return NULL;
+    FILE *f = fopen(path, "rb");
+    if (f) return f;
+    if (!base_dir || !base_dir[0]) return NULL;
+    if (hui_path_is_absolute(path)) return NULL;
+    char combined[1024];
+    size_t base_len = strlen(base_dir);
+    int needs_sep = (base_len > 0) &&
+                    base_dir[base_len - 1] != '/' &&
+                    base_dir[base_len - 1] != '\\';
+#ifdef _WIN32
+    const char sep = '\\';
+#else
+    const char sep = '/';
+#endif
+    if (needs_sep) {
+        snprintf(combined, sizeof(combined), "%s%c%s", base_dir, sep, path);
+    } else {
+        snprintf(combined, sizeof(combined), "%s%s", base_dir, path);
+    }
+    f = fopen(combined, "rb");
+    return f;
+}
+
 struct hui_ctx {
     void * (*alloc_fn)(size_t);
 
@@ -168,6 +214,7 @@ struct hui_ctx {
     hui_stylesheet stylesheet;
     hui_style_store styles;
     hui_draw_list draw;
+    HUI_VEC(hui_font_entry) fonts;
     hui_dom_filter_fn filter_fn;
     void *filter_user;
     hui_filter_spec filter_spec;
@@ -212,6 +259,8 @@ struct hui_ctx {
         int delays_set;
         size_t buffer_capacity;
     } text_input_defaults;
+
+    char asset_base[512];
 
     uint32_t dirty_flags;
     int draw_valid;
@@ -439,6 +488,150 @@ static void hui_render_cache_store(hui_ctx *ctx, const hui_build_opts *opts) {
     ctx->render_cache.valid = 1;
 }
 
+static void hui_fonts_reset(hui_ctx *ctx) {
+    if (!ctx) return;
+    for (size_t i = 0; i < ctx->fonts.len; i++) {
+        hui_font_entry *entry = &ctx->fonts.data[i];
+        if (entry->resource.family) {
+            ctx->free_fn((void *) entry->resource.family);
+            entry->resource.family = NULL;
+        }
+        if (entry->resource.data) {
+            ctx->free_fn((void *) entry->resource.data);
+            entry->resource.data = NULL;
+        }
+        entry->resource.size = 0;
+        if (entry->src_path) {
+            ctx->free_fn(entry->src_path);
+            entry->src_path = NULL;
+        }
+        entry->family_atom = 0;
+        entry->id = HUI_FONT_ID_NONE;
+    }
+    ctx->fonts.len = 0;
+}
+
+static int hui_fonts_load_from_stylesheet(hui_ctx *ctx) {
+    if (!ctx) return HUI_EINVAL;
+    hui_fonts_reset(ctx);
+    for (size_t i = 0; i < ctx->stylesheet.font_faces.len; i++) {
+        const hui_css_font_face *face = &ctx->stylesheet.font_faces.data[i];
+        if (!face->family_name || !face->src || face->src_len == 0)
+            continue;
+        FILE *f = hui_open_asset_stream(ctx->asset_base, face->src);
+        if (!f) {
+            fprintf(stderr, "[hui] warning: font file '%s' not found (skipping @font-face)\n", face->src);
+            continue;
+        }
+        if (fseek(f, 0, SEEK_END) != 0) {
+            fclose(f);
+            hui_set_error(ctx, "failed to seek font file");
+            hui_fonts_reset(ctx);
+            return HUI_EPARSE;
+        }
+        long file_size = ftell(f);
+        if (file_size <= 0) {
+            fclose(f);
+            continue;
+        }
+        if (fseek(f, 0, SEEK_SET) != 0) {
+            fclose(f);
+            hui_set_error(ctx, "failed to rewind font file");
+            hui_fonts_reset(ctx);
+            return HUI_EPARSE;
+        }
+        size_t size = (size_t) file_size;
+        uint8_t *buffer = (uint8_t *) ctx->alloc_fn(size);
+        if (!buffer) {
+            fclose(f);
+            hui_set_error(ctx, "out of memory loading font");
+            hui_fonts_reset(ctx);
+            return HUI_ENOMEM;
+        }
+        size_t read_bytes = fread(buffer, 1, size, f);
+        fclose(f);
+        if (read_bytes != size) {
+            ctx->free_fn(buffer);
+            hui_set_error(ctx, "failed to read full font file");
+            hui_fonts_reset(ctx);
+            return HUI_EPARSE;
+        }
+        size_t family_len = strlen(face->family_name);
+        char *family_copy = (char *) ctx->alloc_fn(family_len + 1);
+        if (!family_copy) {
+            ctx->free_fn(buffer);
+            hui_fonts_reset(ctx);
+            return HUI_ENOMEM;
+        }
+        memcpy(family_copy, face->family_name, family_len + 1);
+        size_t src_len = face->src_len ? face->src_len : strlen(face->src);
+        char *src_copy = (char *) ctx->alloc_fn(src_len + 1);
+        if (!src_copy) {
+            ctx->free_fn(buffer);
+            ctx->free_fn(family_copy);
+            hui_fonts_reset(ctx);
+            return HUI_ENOMEM;
+        }
+        memcpy(src_copy, face->src, src_len);
+        src_copy[src_len] = '\0';
+
+        hui_font_entry entry;
+        memset(&entry, 0, sizeof(entry));
+        entry.id = (hui_font_id) ctx->fonts.len;
+        entry.family_atom = face->family_atom;
+        entry.src_path = src_copy;
+        entry.resource.family = family_copy;
+        entry.resource.weight = face->weight ? face->weight : 400;
+        entry.resource.style = (face->style == 1) ? HUI_FONT_STYLE_ITALIC : HUI_FONT_STYLE_NORMAL;
+        entry.resource.data = buffer;
+        entry.resource.size = read_bytes;
+        hui_vec_push(&ctx->fonts, entry);
+    }
+    return HUI_OK;
+}
+
+static hui_font_id hui_fonts_match(const hui_ctx *ctx, hui_atom family, uint32_t weight, uint32_t style) {
+    if (!ctx || ctx->fonts.len == 0) return HUI_FONT_ID_NONE;
+    uint32_t target_style = style;
+    int prefer_family = family != 0;
+    hui_font_id best_id = HUI_FONT_ID_NONE;
+    uint32_t best_style_penalty = UINT32_MAX;
+    uint32_t best_weight_diff = UINT32_MAX;
+    for (int pass = 0; pass < 2; pass++) {
+        for (size_t i = 0; i < ctx->fonts.len; i++) {
+            const hui_font_entry *entry = &ctx->fonts.data[i];
+            if (prefer_family && entry->family_atom != family) continue;
+            uint32_t entry_style = (uint32_t) entry->resource.style;
+            uint32_t style_penalty = (entry_style == target_style) ? 0u : 1u;
+            uint32_t entry_weight = entry->resource.weight ? entry->resource.weight : 400u;
+            uint32_t weight_diff = (entry_weight > weight)
+                                       ? (entry_weight - weight)
+                                       : (weight - entry_weight);
+            if (style_penalty < best_style_penalty ||
+                (style_penalty == best_style_penalty && weight_diff < best_weight_diff)) {
+                best_style_penalty = style_penalty;
+                best_weight_diff = weight_diff;
+                best_id = entry->id;
+            }
+        }
+        if (best_id != HUI_FONT_ID_NONE) break;
+        if (!prefer_family) break;
+        prefer_family = 0;
+        best_style_penalty = UINT32_MAX;
+        best_weight_diff = UINT32_MAX;
+    }
+    return best_id;
+}
+
+static void hui_style_assign_fonts(hui_ctx *ctx) {
+    if (!ctx) return;
+    size_t count = ctx->styles.styles.len;
+    for (size_t i = 0; i < count; i++) {
+        hui_computed_style *cs = &ctx->styles.styles.data[i];
+        cs->font_id = hui_fonts_match(ctx, cs->font_family, cs->font_weight, cs->font_style);
+    }
+}
+
 hui_ctx *hui_create(void * (*alloc_fn)(size_t), void (*free_fn)(void *)) {
     void * (*afn)(size_t) = alloc_fn ? alloc_fn : malloc;
     void (*ffn)(void *) = free_fn ? free_fn : free;
@@ -452,6 +645,7 @@ hui_ctx *hui_create(void * (*alloc_fn)(size_t), void (*free_fn)(void *)) {
     hui_css_init(&ctx->stylesheet);
     hui_style_store_init(&ctx->styles);
     hui_draw_list_init(&ctx->draw);
+    hui_vec_init(&ctx->fonts);
     hui_vec_init(&ctx->bindings);
     hui_vec_init(&ctx->auto_text_fields);
     hui_vec_init(&ctx->auto_select_fields);
@@ -485,6 +679,7 @@ hui_ctx *hui_create(void * (*alloc_fn)(size_t), void (*free_fn)(void *)) {
     ctx->text_input_defaults.backspace_repeat_delay = 0.0f;
     ctx->text_input_defaults.delays_set = 0;
     ctx->text_input_defaults.buffer_capacity = 256;
+    ctx->asset_base[0] = '\0';
     ctx->dirty_flags = HUI_DIRTY_ALL;
     ctx->draw_valid = 0;
     ctx->draw_version = 0;
@@ -1656,6 +1851,8 @@ void hui_destroy(hui_ctx *ctx) {
     hui_auto_select_fields_reset(ctx);
     hui_vec_free(&ctx->auto_text_fields);
     hui_vec_free(&ctx->auto_select_fields);
+    hui_fonts_reset(ctx);
+    hui_vec_free(&ctx->fonts);
     for (size_t i = 0; i < ctx->bindings.len; i++) {
         hui_binding_entry *entry = &ctx->bindings.data[i];
         hui_vec_free(&entry->text_nodes);
@@ -1747,6 +1944,8 @@ int hui_parse(hui_ctx *ctx) {
             return HUI_EPARSE;
         }
     }
+    int font_status = hui_fonts_load_from_stylesheet(ctx);
+    if (font_status != HUI_OK) return font_status;
     hui_binding_prepare_dom(ctx);
     for (size_t bi = 0; bi < ctx->bindings.len; bi++) {
         hui_binding_entry *entry = &ctx->bindings.data[bi];
@@ -1771,6 +1970,7 @@ int hui_style(hui_ctx *ctx) {
     hui_style_store_reset(&ctx->styles);
     hui_style_store_init(&ctx->styles);
     hui_apply_styles(&ctx->styles, &ctx->dom, &ctx->atoms, &ctx->stylesheet, ctx->prop_mask);
+    hui_style_assign_fonts(ctx);
     hui_auto_select_refresh_visibility(ctx);
     return HUI_OK;
 }
@@ -2259,6 +2459,26 @@ const char *hui_draw_text_utf8(hui_ctx *ctx, const hui_draw *cmd, size_t *len) {
     if (node->type != HUI_NODE_TEXT) return NULL;
     if (len) *len = node->text_len;
     return node->text;
+}
+
+const hui_font_resource *hui_draw_font(hui_ctx *ctx, const hui_draw *cmd) {
+    if (!ctx || !cmd || cmd->op != HUI_DRAW_OP_GLYPH_RUN) return NULL;
+    if (cmd->u2 == HUI_FONT_ID_NONE) return NULL;
+    size_t idx = (size_t) cmd->u2;
+    if (idx >= ctx->fonts.len) return NULL;
+    return &ctx->fonts.data[idx].resource;
+}
+
+void hui_set_asset_base(hui_ctx *ctx, const char *path_utf8) {
+    if (!ctx) return;
+    if (!path_utf8 || !path_utf8[0]) {
+        ctx->asset_base[0] = '\0';
+        return;
+    }
+    size_t len = strlen(path_utf8);
+    if (len >= sizeof(ctx->asset_base)) len = sizeof(ctx->asset_base) - 1;
+    memcpy(ctx->asset_base, path_utf8, len);
+    ctx->asset_base[len] = '\0';
 }
 
 hui_node_handle hui_dom_root(hui_ctx *ctx) {

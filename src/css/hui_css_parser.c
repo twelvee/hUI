@@ -57,6 +57,116 @@ static int parse_px_shorthand(const char *s, size_t n, float out[4]) {
     return 0;
 }
 
+static char *hui_css_strndup(const char *s, size_t len) {
+    if (!s) return NULL;
+    char *out = (char *) malloc(len + 1);
+    if (!out) return NULL;
+    if (len > 0) memcpy(out, s, len);
+    out[len] = '\0';
+    return out;
+}
+
+static uint32_t parse_font_weight_value(const char *s, size_t len) {
+    while (len > 0 && isspace((unsigned char) s[0])) {
+        s++;
+        len--;
+    }
+    while (len > 0 && isspace((unsigned char) s[len - 1])) len--;
+    if (len == 0) return 400;
+    if ((len == 6 || len == 7) && strncmp(s, "normal", len) == 0) return 400;
+    if ((len == 4 || len == 5) && strncmp(s, "bold", len) == 0) return 700;
+    float weight = parse_float_token(s, len);
+    if (weight < 50.0f) weight = 50.0f;
+    if (weight > 1000.0f) weight = 1000.0f;
+    return (uint32_t) weight;
+}
+
+static uint32_t parse_font_style_value(const char *s, size_t len) {
+    while (len > 0 && isspace((unsigned char) s[0])) {
+        s++;
+        len--;
+    }
+    while (len > 0 && isspace((unsigned char) s[len - 1])) len--;
+    if (len == 0) return 0;
+    if ((len == 6 || len == 7) && strncmp(s, "normal", len) == 0) return 0;
+    if ((len == 6 || len == 7) && strncmp(s, "italic", len) == 0) return 1;
+    return 0;
+}
+
+static char *parse_font_family_token(const char *s, size_t len) {
+    size_t start = 0;
+    while (start < len && isspace((unsigned char) s[start])) start++;
+    if (start >= len) return NULL;
+    size_t end = len;
+    while (end > start && isspace((unsigned char) s[end - 1])) end--;
+    if (end <= start) return NULL;
+    if (s[start] == '\'' || s[start] == '\"') {
+        char quote = s[start];
+        start++;
+        size_t q = start;
+        while (q < end && s[q] != quote) q++;
+        if (q <= start) return NULL;
+        return hui_css_strndup(s + start, q - start);
+    }
+    size_t pos = start;
+    while (pos < end) {
+        if (s[pos] == ',') break;
+        pos++;
+    }
+    size_t token_end = pos;
+    while (token_end > start && isspace((unsigned char) s[token_end - 1])) token_end--;
+    if (token_end <= start) return NULL;
+    return hui_css_strndup(s + start, token_end - start);
+}
+
+static char *parse_font_face_src(const char *s, size_t len, size_t *out_len) {
+    size_t pos = 0;
+    int found = 0;
+    while (pos + 4 <= len) {
+        char c0 = s[pos];
+        char c1 = s[pos + 1];
+        char c2 = s[pos + 2];
+        char c3 = s[pos + 3];
+        if ((c0 == 'u' || c0 == 'U') &&
+            (c1 == 'r' || c1 == 'R') &&
+            (c2 == 'l' || c2 == 'L') &&
+            c3 == '(') {
+            pos += 4;
+            found = 1;
+            break;
+        }
+        pos++;
+    }
+    if (!found) return NULL;
+    while (pos < len && isspace((unsigned char) s[pos])) pos++;
+    if (pos >= len) return NULL;
+    char quote = 0;
+    if (s[pos] == '\'' || s[pos] == '\"') {
+        quote = s[pos];
+        pos++;
+    }
+    size_t start = pos;
+    while (pos < len) {
+        if (quote) {
+            if (s[pos] == quote) break;
+        } else if (s[pos] == ')') {
+            break;
+        }
+        pos++;
+    }
+    if (pos > len) return NULL;
+    size_t end = pos;
+    if (quote) {
+        while (pos < len && s[pos] != ')') pos++;
+    }
+    if (pos >= len || s[pos] != ')') return NULL;
+    size_t trimmed_end = end;
+    while (trimmed_end > start && isspace((unsigned char) s[trimmed_end - 1])) trimmed_end--;
+    if (trimmed_end <= start) return NULL;
+    if (out_len) *out_len = trimmed_end - start;
+    return hui_css_strndup(s + start, trimmed_end - start);
+}
+
 static void skip_ws(const char *s, size_t n, size_t *i) {
     while (*i < n) {
         if (isspace((unsigned char) s[*i])) {
@@ -175,6 +285,7 @@ static hui_selector parse_selector(hui_intern *atoms, const char *css, size_t n,
 
 void hui_css_init(hui_stylesheet *sheet) {
     hui_vec_init(&sheet->rules);
+    hui_vec_init(&sheet->font_faces);
 }
 
 void hui_css_reset(hui_stylesheet *sheet) {
@@ -184,9 +295,30 @@ void hui_css_reset(hui_stylesheet *sheet) {
             hui_vec_free(&rule->selectors.data[j].steps);
         }
         hui_vec_free(&rule->selectors);
+        for (size_t j = 0; j < rule->decls.len; j++) {
+            hui_decl *decl = &rule->decls.data[j];
+            if (decl->val.kind == HUI_VAL_STRING && decl->val.data.str.ptr) {
+                free(decl->val.data.str.ptr);
+                decl->val.data.str.ptr = NULL;
+                decl->val.data.str.len = 0;
+            }
+        }
         hui_vec_free(&rule->decls);
     }
     hui_vec_free(&sheet->rules);
+    for (size_t i = 0; i < sheet->font_faces.len; i++) {
+        hui_css_font_face *face = &sheet->font_faces.data[i];
+        if (face->family_name) {
+            free(face->family_name);
+            face->family_name = NULL;
+        }
+        if (face->src) {
+            free(face->src);
+            face->src = NULL;
+            face->src_len = 0;
+        }
+    }
+    hui_vec_free(&sheet->font_faces);
 }
 
 int hui_css_parse(hui_stylesheet *sheet, hui_intern *atoms, const char *css, size_t len) {
@@ -194,6 +326,78 @@ int hui_css_parse(hui_stylesheet *sheet, hui_intern *atoms, const char *css, siz
     while (1) {
         skip_ws(css, len, &i);
         if (i >= len) break;
+        if (css[i] == '@') {
+            i++;
+            size_t at_start = i;
+            while (i < len && is_name_char(css[i])) i++;
+            size_t at_len = i - at_start;
+            if (at_len == 9 && strncmp(css + at_start, "font-face", 9) == 0) {
+                skip_ws(css, len, &i);
+                if (i < len && css[i] == '{') i++;
+                hui_css_font_face face;
+                memset(&face, 0, sizeof(face));
+                face.weight = 400;
+                face.style = 0;
+                while (i < len) {
+                    skip_ws(css, len, &i);
+                    if (i < len && css[i] == '}') {
+                        i++;
+                        break;
+                    }
+                    size_t prop_start = i;
+                    while (i < len && is_name_char(css[i])) i++;
+                    size_t prop_len = i - prop_start;
+                    skip_ws(css, len, &i);
+                    if (i < len && css[i] == ':') i++;
+                    skip_ws(css, len, &i);
+                    size_t prop_val_start = i;
+                    while (i < len && css[i] != ';' && css[i] != '}') i++;
+                    size_t prop_val_len = i - prop_val_start;
+                    const char *prop_ptr = css + prop_start;
+                    const char *prop_val_ptr = css + prop_val_start;
+                    if (prop_len == 11 && strncmp(prop_ptr, "font-family", 11) == 0) {
+                        char *family = parse_font_family_token(prop_val_ptr, prop_val_len);
+                        if (family) {
+                            if (face.family_name) free(face.family_name);
+                            face.family_name = family;
+                            face.family_atom = hui_intern_put(atoms, family, strlen(family));
+                        }
+                    } else if (prop_len == 11 && strncmp(prop_ptr, "font-weight", 11) == 0) {
+                        face.weight = parse_font_weight_value(prop_val_ptr, prop_val_len);
+                    } else if (prop_len == 10 && strncmp(prop_ptr, "font-style", 10) == 0) {
+                        face.style = parse_font_style_value(prop_val_ptr, prop_val_len);
+                    } else if (prop_len == 3 && strncmp(prop_ptr, "src", 3) == 0) {
+                        size_t src_len = 0;
+                        char *src = parse_font_face_src(prop_val_ptr, prop_val_len, &src_len);
+                        if (src) {
+                            if (face.src) free(face.src);
+                            face.src = src;
+                            face.src_len = src_len;
+                        }
+                    }
+                    if (i < len && css[i] == ';') i++;
+                }
+                if (face.family_name && face.src) {
+                    hui_vec_push(&sheet->font_faces, face);
+                } else {
+                    if (face.family_name) free(face.family_name);
+                    if (face.src) free(face.src);
+                }
+                continue;
+            } else {
+                while (i < len && css[i] != '{') i++;
+                if (i < len && css[i] == '{') {
+                    int depth = 1;
+                    i++;
+                    while (i < len && depth > 0) {
+                        if (css[i] == '{') depth++;
+                        else if (css[i] == '}') depth--;
+                        i++;
+                    }
+                }
+                continue;
+            }
+        }
         hui_rule rule;
         hui_vec_init(&rule.selectors);
         hui_vec_init(&rule.decls);
@@ -226,80 +430,117 @@ int hui_css_parse(hui_stylesheet *sheet, hui_intern *atoms, const char *css, siz
             size_t value_start = i;
             while (i < len && css[i] != ';' && css[i] != '}') i++;
             size_t value_len = i - value_start;
+            const char *name_ptr = css + name_start;
+            const char *value_ptr = css + value_start;
 
             hui_decl decl;
             memset(&decl, 0, sizeof(decl));
-            if (name_len == 7 && strncmp(css + name_start, "display", 7) == 0) {
+            if (name_len == 7 && strncmp(name_ptr, "display", 7) == 0) {
                 decl.id = HUI_DECL_DISPLAY;
                 decl.val.kind = HUI_VAL_ENUM;
-                if (value_len == 5 && strncmp(css + value_start, "block", 5) == 0) decl.val.u32 = 1;
-                else if (value_len == 6 && strncmp(css + value_start, "inline", 6) == 0) decl.val.u32 = 2;
-                else decl.val.u32 = 1;
-            } else if (name_len == 5 && strncmp(css + name_start, "color", 5) == 0) {
+                if (value_len == 5 && strncmp(value_ptr, "block", 5) == 0) decl.val.data.u32 = 1;
+                else if (value_len == 6 && strncmp(value_ptr, "inline", 6) == 0) decl.val.data.u32 = 2;
+                else decl.val.data.u32 = 1;
+            } else if (name_len == 5 && strncmp(name_ptr, "color", 5) == 0) {
                 decl.id = HUI_DECL_COLOR;
                 decl.val.kind = HUI_VAL_COLOR;
-                decl.val.u32 = parse_hex_color(css + value_start, value_len);
-            } else if (name_len == 16 && strncmp(css + name_start, "background-color", 16) == 0) {
+                decl.val.data.u32 = parse_hex_color(value_ptr, value_len);
+            } else if (name_len == 16 && strncmp(name_ptr, "background-color", 16) == 0) {
                 decl.id = HUI_DECL_BG_COLOR;
                 decl.val.kind = HUI_VAL_COLOR;
-                decl.val.u32 = parse_hex_color(css + value_start, value_len);
-            } else if (name_len == 5 && strncmp(css + name_start, "width", 5) == 0) {
+                decl.val.data.u32 = parse_hex_color(value_ptr, value_len);
+            } else if (name_len == 5 && strncmp(name_ptr, "width", 5) == 0) {
                 decl.id = HUI_DECL_WIDTH;
                 decl.val.kind = HUI_VAL_AUTO;
-                if (value_len > 2 && strncmp(css + value_start + value_len - 2, "px", 2) == 0) {
+                if (value_len > 2 && strncmp(value_ptr + value_len - 2, "px", 2) == 0) {
                     decl.val.kind = HUI_VAL_PX;
-                    decl.val.num = parse_float_token(css + value_start, value_len - 2);
+                    decl.val.data.num = parse_float_token(value_ptr, value_len - 2);
                 }
-            } else if (name_len == 6 && strncmp(css + name_start, "height", 6) == 0) {
+            } else if (name_len == 6 && strncmp(name_ptr, "height", 6) == 0) {
                 decl.id = HUI_DECL_HEIGHT;
                 decl.val.kind = HUI_VAL_AUTO;
-                if (value_len > 2 && strncmp(css + value_start + value_len - 2, "px", 2) == 0) {
+                if (value_len > 2 && strncmp(value_ptr + value_len - 2, "px", 2) == 0) {
                     decl.val.kind = HUI_VAL_PX;
-                    decl.val.num = parse_float_token(css + value_start, value_len - 2);
+                    decl.val.data.num = parse_float_token(value_ptr, value_len - 2);
                 }
-            } else if (name_len >= 6 && strncmp(css + name_start, "margin", 6) == 0) {
+            } else if (name_len == 10 && strncmp(name_ptr, "min-height", 10) == 0) {
+                decl.id = HUI_DECL_MIN_HEIGHT;
+                decl.val.kind = HUI_VAL_AUTO;
+                if (value_len > 2 && strncmp(value_ptr + value_len - 2, "px", 2) == 0) {
+                    decl.val.kind = HUI_VAL_PX;
+                    decl.val.data.num = parse_float_token(value_ptr, value_len - 2);
+                }
+            } else if (name_len >= 6 && strncmp(name_ptr, "margin", 6) == 0) {
                 float sides[4];
-                if (parse_px_shorthand(css + value_start, value_len, sides) == 0) {
+                if (parse_px_shorthand(value_ptr, value_len, sides) == 0) {
                     decl.val.kind = HUI_VAL_PX;
                     decl.id = HUI_DECL_MARGIN_TOP;
-                    decl.val.num = sides[0];
+                    decl.val.data.num = sides[0];
                     hui_vec_push(&rule.decls, decl);
                     decl.id = HUI_DECL_MARGIN_RIGHT;
-                    decl.val.num = sides[1];
+                    decl.val.data.num = sides[1];
                     hui_vec_push(&rule.decls, decl);
                     decl.id = HUI_DECL_MARGIN_BOTTOM;
-                    decl.val.num = sides[2];
+                    decl.val.data.num = sides[2];
                     hui_vec_push(&rule.decls, decl);
                     decl.id = HUI_DECL_MARGIN_LEFT;
-                    decl.val.num = sides[3];
+                    decl.val.data.num = sides[3];
                     hui_vec_push(&rule.decls, decl);
                     goto after_push;
                 }
-            } else if (name_len >= 7 && strncmp(css + name_start, "padding", 7) == 0) {
+            } else if (name_len >= 7 && strncmp(name_ptr, "padding", 7) == 0) {
                 float sides[4];
-                if (parse_px_shorthand(css + value_start, value_len, sides) == 0) {
+                if (parse_px_shorthand(value_ptr, value_len, sides) == 0) {
                     decl.val.kind = HUI_VAL_PX;
                     decl.id = HUI_DECL_PADDING_TOP;
-                    decl.val.num = sides[0];
+                    decl.val.data.num = sides[0];
                     hui_vec_push(&rule.decls, decl);
                     decl.id = HUI_DECL_PADDING_RIGHT;
-                    decl.val.num = sides[1];
+                    decl.val.data.num = sides[1];
                     hui_vec_push(&rule.decls, decl);
                     decl.id = HUI_DECL_PADDING_BOTTOM;
-                    decl.val.num = sides[2];
+                    decl.val.data.num = sides[2];
                     hui_vec_push(&rule.decls, decl);
                     decl.id = HUI_DECL_PADDING_LEFT;
-                    decl.val.num = sides[3];
+                    decl.val.data.num = sides[3];
                     hui_vec_push(&rule.decls, decl);
                     goto after_push;
                 }
-            } else if (name_len == 9 && strncmp(css + name_start, "font-size", 9) == 0) {
+            } else if (name_len == 9 && strncmp(name_ptr, "font-size", 9) == 0) {
                 decl.id = HUI_DECL_FONT_SIZE;
                 decl.val.kind = HUI_VAL_PX;
-                if (value_len > 2 && strncmp(css + value_start + value_len - 2, "px", 2) == 0)
-                    decl.val.num = parse_float_token(css + value_start, value_len - 2);
+                if (value_len > 2 && strncmp(value_ptr + value_len - 2, "px", 2) == 0)
+                    decl.val.data.num = parse_float_token(value_ptr, value_len - 2);
                 else
-                    decl.val.num = 16.0f;
+                    decl.val.data.num = 16.0f;
+            } else if (name_len == 11 && strncmp(name_ptr, "font-weight", 11) == 0) {
+                decl.id = HUI_DECL_FONT_WEIGHT;
+                decl.val.kind = HUI_VAL_NUMBER;
+                decl.val.data.num = (float) parse_font_weight_value(value_ptr, value_len);
+            } else if (name_len == 10 && strncmp(name_ptr, "font-style", 10) == 0) {
+                decl.id = HUI_DECL_FONT_STYLE;
+                decl.val.kind = HUI_VAL_ENUM;
+                decl.val.data.u32 = parse_font_style_value(value_ptr, value_len);
+            } else if (name_len == 11 && strncmp(name_ptr, "font-family", 11) == 0) {
+                char *family = parse_font_family_token(value_ptr, value_len);
+                if (family) {
+                    decl.id = HUI_DECL_FONT_FAMILY;
+                    decl.val.kind = HUI_VAL_ATOM;
+                    decl.val.data.atom = hui_intern_put(atoms, family, strlen(family));
+                    free(family);
+                }
+            } else if (name_len == 11 && strncmp(name_ptr, "line-height", 11) == 0) {
+                decl.id = HUI_DECL_LINE_HEIGHT;
+                if (value_len == 6 && strncmp(value_ptr, "normal", 6) == 0) {
+                    decl.val.kind = HUI_VAL_ENUM;
+                    decl.val.data.u32 = 0;
+                } else if (value_len > 2 && strncmp(value_ptr + value_len - 2, "px", 2) == 0) {
+                    decl.val.kind = HUI_VAL_PX;
+                    decl.val.data.num = parse_float_token(value_ptr, value_len - 2);
+                } else {
+                    decl.val.kind = HUI_VAL_NUMBER;
+                    decl.val.data.num = parse_float_token(value_ptr, value_len);
+                }
             } else {
                 decl.id = 0;
             }

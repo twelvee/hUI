@@ -17,7 +17,8 @@ typedef struct {
     hui_draw_op op;
     uint32_t u0;
     uint32_t u1;
-    float f[6];
+    uint32_t u2;
+    float f[7];
 } hui_draw;
 
 typedef struct {

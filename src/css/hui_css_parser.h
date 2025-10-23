@@ -36,6 +36,7 @@ typedef enum {
     HUI_DECL_DISPLAY = 1,
     HUI_DECL_WIDTH,
     HUI_DECL_HEIGHT,
+    HUI_DECL_MIN_HEIGHT,
     HUI_DECL_MARGIN_TOP,
     HUI_DECL_MARGIN_RIGHT,
     HUI_DECL_MARGIN_BOTTOM,
@@ -47,17 +48,34 @@ typedef enum {
     HUI_DECL_BG_COLOR,
     HUI_DECL_COLOR,
     HUI_DECL_FONT_SIZE,
-    HUI_DECL_FONT_WEIGHT
+    HUI_DECL_FONT_WEIGHT,
+    HUI_DECL_FONT_STYLE,
+    HUI_DECL_FONT_FAMILY,
+    HUI_DECL_LINE_HEIGHT
 } hui_decl_id;
 
 typedef enum {
-    HUI_VAL_AUTO = 0, HUI_VAL_PX = 1, HUI_VAL_PERCENT = 2, HUI_VAL_COLOR = 3, HUI_VAL_ENUM = 4
+    HUI_VAL_AUTO = 0,
+    HUI_VAL_PX = 1,
+    HUI_VAL_PERCENT = 2,
+    HUI_VAL_COLOR = 3,
+    HUI_VAL_ENUM = 4,
+    HUI_VAL_NUMBER = 5,
+    HUI_VAL_ATOM = 6,
+    HUI_VAL_STRING = 7
 } hui_value_kind;
 
 typedef struct {
     hui_value_kind kind;
-    float num;
-    uint32_t u32;
+    union {
+        float num;
+        uint32_t u32;
+        hui_atom atom;
+        struct {
+            char *ptr;
+            size_t len;
+        } str;
+    } data;
 } hui_value;
 
 typedef struct {
@@ -72,7 +90,17 @@ typedef struct {
 } hui_rule;
 
 typedef struct {
+    hui_atom family_atom;
+    char *family_name;
+    char *src;
+    size_t src_len;
+    uint32_t weight;
+    uint32_t style;
+} hui_css_font_face;
+
+typedef struct {
     HUI_VEC(hui_rule) rules;
+    HUI_VEC(hui_css_font_face) font_faces;
 } hui_stylesheet;
 
 void hui_css_init(hui_stylesheet *sheet);

@@ -25,7 +25,8 @@ enum {
     HUI_NODE_TF_PLACEHOLDER = 1u << 1,
     HUI_NODE_TF_FOCUSED = 1u << 2,
     HUI_NODE_TF_CARET_VISIBLE = 1u << 3,
-    HUI_NODE_TF_HAS_SELECTION = 1u << 4
+    HUI_NODE_TF_HAS_SELECTION = 1u << 4,
+    HUI_NODE_TF_MULTILINE = 1u << 5
 };
 
 typedef struct hui_dom_node {

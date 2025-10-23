@@ -10,6 +10,14 @@
 #include "hui/hui_draw.h"
 #include "hui/hui_html_tags.h"
 
+typedef struct {
+    const hui_font_resource *resource;
+    Font font;
+} loaded_font_entry;
+
+static loaded_font_entry g_loaded_fonts[16];
+static size_t g_loaded_font_count = 0;
+
 static Color hui_color_from_argb(uint32_t argb) {
     Color color = {
         .r = (unsigned char) ((argb >> 16) & 0xFFu),
@@ -18,6 +26,29 @@ static Color hui_color_from_argb(uint32_t argb) {
         .a = (unsigned char) ((argb >> 24) & 0xFFu)
     };
     return color;
+}
+
+static Font example_get_font(hui_ctx *ctx, const hui_draw *cmd) {
+    const hui_font_resource *res = hui_draw_font(ctx, cmd);
+    if (!res) return GetFontDefault();
+    for (size_t i = 0; i < g_loaded_font_count; i++) {
+        if (g_loaded_fonts[i].resource == res) return g_loaded_fonts[i].font;
+    }
+    if (g_loaded_font_count >= (sizeof(g_loaded_fonts) / sizeof(g_loaded_fonts[0]))) {
+        TraceLog(LOG_WARNING, "Font cache capacity reached, falling back to default font");
+        return GetFontDefault();
+    }
+    Font font = LoadFontFromMemory(".ttf", res->data, (int) res->size, 32, NULL, 0);
+    if (font.texture.id == 0) {
+        TraceLog(LOG_WARNING, "Failed to load font '%s', using default", res->family ? res->family : "(unknown)");
+        return GetFontDefault();
+    }
+    TraceLog(LOG_INFO, "Loaded font '%s' (%u glyphs texture %dx%d)", res->family ? res->family : "(unknown)", font.glyphCount, font.texture.width, font.texture.height);
+    SetTextureFilter(font.texture, TEXTURE_FILTER_BILINEAR);
+    g_loaded_fonts[g_loaded_font_count].resource = res;
+    g_loaded_fonts[g_loaded_font_count].font = font;
+    g_loaded_font_count++;
+    return font;
 }
 
 static void draw_text_utf8(hui_ctx *ctx, const hui_draw *cmd) {
@@ -36,7 +67,7 @@ static void draw_text_utf8(hui_ctx *ctx, const hui_draw *cmd) {
 
     float font_size = cmd->f[4] > 0.0f ? cmd->f[4] : 16.0f;
     float scroll_x = cmd->f[5];
-    float line_height = font_size * HUI_TEXT_APPROX_LINE_HEIGHT;
+    float line_height = (cmd->f[6] > 0.0f) ? cmd->f[6] : (font_size * HUI_TEXT_APPROX_LINE_HEIGHT);
     int clip_scissor = (scroll_x >= 0.0f) && (cmd->f[2] > 0.0f) && (cmd->f[3] > 0.0f);
     if (clip_scissor) {
         int sx = (int) floorf(cmd->f[0]);
@@ -46,32 +77,33 @@ static void draw_text_utf8(hui_ctx *ctx, const hui_draw *cmd) {
         if (sw > 0 && sh > 0) BeginScissorMode(sx, sy, sw, sh);
         else clip_scissor = 0;
     }
-    Font font = GetFontDefault();
-    float char_width = font_size * HUI_TEXT_APPROX_CHAR_ADVANCE;
-    if (char_width <= 0.0f) char_width = font_size;
+    Font font = example_get_font(ctx, cmd);
+    if (font.texture.id == 0) {
+        TraceLog(LOG_WARNING, "Using default font fallback for draw cmd");
+    }
+    static int debug_count = 0;
+    if (debug_count < 4) {
+        debug_count++;
+        TraceLog(LOG_INFO, "draw run fontId=%u size=%.1f texture=%d text=\"%.*s\"", cmd->u2, font_size, font.texture.id,
+                 (int) ((text_len < 12) ? text_len : 12), text);
+    }
     float draw_x = cmd->f[0] - (scroll_x >= 0.0f ? scroll_x : 0.0f);
-    Vector2 pen = {draw_x, cmd->f[1]};
-    size_t idx = 0;
-    while (idx < text_len) {
-        int consumed = 0;
-        int codepoint = GetCodepoint(buffer + idx, &consumed);
-        if (consumed <= 0) {
-            consumed = 1;
-            codepoint = (unsigned char) buffer[idx];
+    Vector2 line_pos = {draw_x, cmd->f[1]};
+    size_t start = 0;
+    while (start < text_len) {
+        size_t end = start;
+        while (end < text_len && buffer[end] != '\n') end++;
+        size_t line_len = end - start;
+        if (line_len > 0) {
+            char saved = buffer[end];
+            buffer[end] = '\0';
+            DrawTextEx(font, buffer + start, line_pos, font_size, 0.0f, hui_color_from_argb(cmd->u0));
+            buffer[end] = saved;
         }
-        if (codepoint == '\r') {
-            idx += (size_t) consumed;
-            continue;
-        }
-        if (codepoint == '\n') {
-            pen.x = draw_x;
-            pen.y += line_height;
-            idx += (size_t) consumed;
-            continue;
-        }
-        DrawTextCodepoint(font, codepoint, pen, font_size, hui_color_from_argb(cmd->u0));
-        pen.x += char_width;
-        idx += (size_t) consumed;
+        if (end >= text_len) break;
+        start = end + 1;
+        line_pos.x = draw_x;
+        line_pos.y += line_height;
     }
     if (clip_scissor) EndScissorMode();
 
@@ -319,6 +351,7 @@ int main(void) {
     };
     hui_set_text_input_defaults(ctx, &clipboard, &keymap, 512);
     hui_set_text_input_repeat(ctx, 0.4f, 0.05f);
+    hui_set_asset_base(ctx, "examples/raylib_simple");
 
     const char *html_path = "examples/raylib_simple/ui.html";
     char *html_text = LoadFileText(html_path);
@@ -414,6 +447,11 @@ int main(void) {
 
     if (ui_layer.id != 0) {
         UnloadRenderTexture(ui_layer);
+    }
+    for (size_t i = 0; i < g_loaded_font_count; i++) {
+        if (g_loaded_fonts[i].font.texture.id != 0) {
+            UnloadFont(g_loaded_fonts[i].font);
+        }
     }
     hui_destroy(ctx);
     CloseWindow();

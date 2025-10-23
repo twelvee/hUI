@@ -208,6 +208,27 @@ hui_draw_list_view hui_get_draw_list(hui_ctx *ctx);
 
 const char *hui_draw_text_utf8(hui_ctx *ctx, const hui_draw *cmd, size_t *len);
 
+typedef uint32_t hui_font_id;
+
+#define HUI_FONT_ID_NONE ((hui_font_id) 0xFFFFFFFFu)
+
+typedef enum {
+    HUI_FONT_STYLE_NORMAL = 0,
+    HUI_FONT_STYLE_ITALIC = 1
+} hui_font_style;
+
+typedef struct {
+    const char *family;
+    uint32_t weight;
+    hui_font_style style;
+    const uint8_t *data;
+    size_t size;
+} hui_font_resource;
+
+const hui_font_resource *hui_draw_font(hui_ctx *ctx, const hui_draw *cmd);
+
+void hui_set_asset_base(hui_ctx *ctx, const char *path_utf8);
+
 hui_node_handle hui_dom_root(hui_ctx *ctx);
 
 hui_node_handle hui_dom_query_id(hui_ctx *ctx, const char *id_utf8);

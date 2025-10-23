@@ -397,6 +397,7 @@ static void hui_text_field_update_scroll(hui_ctx *ctx, hui_text_field *field,
 static void hui_text_field_update_dom_state(hui_ctx *ctx, hui_text_field *field) {
     if (!ctx || !field) return;
     uint32_t flags = HUI_NODE_TF_VALUE;
+    if (field->multiline) flags |= HUI_NODE_TF_MULTILINE;
     size_t caret_cp = 0;
     size_t sel_start_cp = 0;
     size_t sel_end_cp = 0;

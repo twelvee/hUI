@@ -515,6 +515,35 @@ static void test_font_size_application(void) {
     hui_destroy(ctx);
 }
 
+static void test_font_face_loading(void) {
+    const char *html = "<div>Inter</div>";
+    const char *css =
+            "@font-face { font-family: \"Inter\"; src: url(\"Inter-Regular.ttf\"); font-weight: 400; }\n"
+            "div { font-family: \"Inter\"; }";
+    hui_ctx *ctx = hui_create(NULL, NULL);
+    ASSERT(ctx != NULL);
+    hui_set_asset_base(ctx, "examples/raylib_simple");
+    ASSERT(hui_feed_html(ctx, (hui_bytes){(const uint8_t *) html, strlen(html)}, 1) == HUI_OK);
+    ASSERT(hui_feed_css(ctx, (hui_bytes){(const uint8_t *) css, strlen(css)}, 1) == HUI_OK);
+    ASSERT(hui_parse(ctx) == HUI_OK);
+    hui_build_opts opts = {320.0f, 200.0f, 96.0f, 0};
+    hui_render_output out = {0};
+    ASSERT(hui_render(ctx, &opts, &out) == HUI_OK);
+    int font_found = 0;
+    hui_draw_list_view view = out.draw;
+    for (size_t i = 0; i < view.count; i++) {
+        const hui_draw *cmd = &view.items[i];
+        if (cmd->op != HUI_DRAW_OP_GLYPH_RUN) continue;
+        const hui_font_resource *font = hui_draw_font(ctx, cmd);
+        if (font && font->family && strcmp(font->family, "Inter") == 0) {
+            font_found = 1;
+            break;
+        }
+    }
+    ASSERT(font_found);
+    hui_destroy(ctx);
+}
+
 static void test_text_field_interaction(void) {
     const char *html = "<!doctype html><html><body>"
                        "<div id='name-input' class='input'><span id='name-value'></span></div>"
@@ -923,6 +952,31 @@ static void test_textarea_multiline(void) {
     size_t sel_end = field.sel_anchor > field.caret ? field.sel_anchor : field.caret;
     ASSERT(sel_start == strlen("One\nTwo\n"));
     ASSERT(sel_end == strlen("One\nTwo\nThree"));
+
+    hui_destroy(ctx);
+}
+
+static void test_textarea_min_height(void) {
+    hui_ctx *ctx = hui_create(NULL, NULL);
+    ASSERT(ctx != NULL);
+
+    const char *html = "<!doctype html><html><body>"
+                       "<textarea id='note'></textarea>"
+                       "</body></html>";
+    const char *css = "textarea { min-height: 120px; padding: 8px; }";
+    ASSERT(hui_feed_html(ctx, (hui_bytes){(const uint8_t *) html, strlen(html)}, 1) == HUI_OK);
+    ASSERT(hui_feed_css(ctx, (hui_bytes){(const uint8_t *) css, strlen(css)}, 1) == HUI_OK);
+    ASSERT(hui_parse(ctx) == HUI_OK);
+
+    hui_build_opts opts = {240.0f, 240.0f, 96.0f, 0};
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    hui_node_handle textarea = hui_dom_query_id(ctx, "note");
+    ASSERT(!hui_node_is_null(textarea));
+
+    hui_rect rect;
+    ASSERT(hui_node_get_layout(ctx, textarea, &rect) == HUI_OK);
+    ASSERT(rect.h >= 120.0f);
 
     hui_destroy(ctx);
 }
@@ -1438,9 +1492,11 @@ static const test_case tests[] = {
     {"button_text_color", test_button_text_color},
     {"input_hover_interaction", test_input_hover_interaction},
     {"font_size_application", test_font_size_application},
+    {"font_face_loading", test_font_face_loading},
     {"text_field_interaction", test_text_field_interaction},
     {"text_field_scroll", test_text_field_scroll},
     {"textarea_multiline", test_textarea_multiline},
+    {"textarea_min_height", test_textarea_min_height},
     {"text_template_bindings", test_text_template_bindings},
     {"render_caching", test_render_caching},
     {"text_binding_render", test_text_binding_render},
