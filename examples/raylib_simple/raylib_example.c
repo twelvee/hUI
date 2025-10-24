@@ -286,6 +286,8 @@ int main(void) {
         return 1;
     }
 
+    hui_enable_profiler(ctx, GetWindowHandle());
+
     hui_set_dom_filter(ctx, only_ui, NULL);
 
     char name_value[128] = "Pat";

@@ -10,9 +10,11 @@
 #include "layout/hui_layout.h"
 #include "paint/hui_paint.h"
 #include "ir/hui_ir.h"
+#include "hui_profiler_internal.h"
 
 #include <stdlib.h>
-#include <string.h>`r`n#include <stddef.h>
+#include <string.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <ctype.h>
 #include <math.h>
@@ -355,6 +357,8 @@ struct hui_ctx {
         uint32_t flags;
         int valid;
     } render_cache;
+
+    struct hui_profiler *profiler;
 
     char last_error[256];
 };
@@ -1149,6 +1153,7 @@ hui_ctx *hui_create(void * (*alloc_fn)(size_t), void (*free_fn)(void *)) {
     ctx->render_cache.valid = 0;
     ctx->action_result_buffer = NULL;
     ctx->action_result_capacity = 0;
+    ctx->profiler = NULL;
     return ctx;
 }
 
@@ -2348,6 +2353,10 @@ static uint32_t hui_auto_text_fields_step(hui_ctx *ctx, float dt) {
 
 void hui_destroy(hui_ctx *ctx) {
     if (!ctx) return;
+    if (ctx->profiler) {
+        hui_profiler_disable(ctx->profiler, ctx->free_fn);
+        ctx->profiler = NULL;
+    }
     free(ctx->html);
     free(ctx->css);
     hui_intern_reset(&ctx->atoms);
@@ -2379,6 +2388,15 @@ void hui_destroy(hui_ctx *ctx) {
     if (ctx->action_result_buffer) ctx->free_fn(ctx->action_result_buffer);
     hui_vec_free(&ctx->actions);
     ctx->free_fn(ctx);
+}
+
+void hui_enable_profiler(hui_ctx *ctx, void *native_window_handle) {
+    if (!ctx) return;
+    if (!ctx->profiler) {
+        ctx->profiler = hui_profiler_enable(ctx->alloc_fn, ctx->free_fn, native_window_handle);
+    } else {
+        hui_profiler_set_window(ctx->profiler, native_window_handle);
+    }
 }
 
 void hui_set_dom_filter(hui_ctx *ctx, hui_dom_filter_fn fn, void *user) {
@@ -2532,35 +2550,45 @@ int hui_render(hui_ctx *ctx, const hui_build_opts *opts, hui_render_output *out)
     int needs_layout = opts_changed || !ctx->draw_valid || ((pending_dirty & HUI_DIRTY_LAYOUT) != 0) || needs_style;
     int needs_paint = opts_changed || !ctx->draw_valid || ((pending_dirty & HUI_DIRTY_PAINT) != 0) || needs_layout;
     int status = HUI_OK;
+    struct hui_profiler *prof = ctx->profiler;
+    uint64_t render_total_token = prof ? hui_profiler_stage_begin(prof, HUI_PROF_STAGE_RENDER_TOTAL) : 0;
 
     if (!needs_style && !needs_layout && !needs_paint) {
-        local_out.changed = 0;
         local_out.dirty_flags = pending_dirty;
         local_out.draw.items = ctx->draw.cmds.data;
         local_out.draw.count = ctx->draw.cmds.len;
         if (out) *out = local_out;
-        return status;
-    }
-
-    if (!needs_style && !needs_layout && !needs_paint) {
-        local_out.changed = 0;
-        local_out.dirty_flags = pending_dirty;
-        local_out.draw.items = ctx->draw.cmds.data;
-        local_out.draw.count = ctx->draw.cmds.len;
-        if (out) *out = local_out;
+        if (prof) {
+            hui_profiler_capture_render(prof,
+                                        ctx->dom.nodes.len,
+                                        ctx->draw.cmds.len,
+                                        ctx->auto_text_fields.len,
+                                        ctx->auto_select_fields.len,
+                                        ctx->bindings.len,
+                                        pending_dirty,
+                                        ctx->dirty_flags & HUI_DIRTY_ALL,
+                                        local_out.changed);
+            hui_profiler_stage_end(prof, HUI_PROF_STAGE_RENDER_TOTAL, render_total_token);
+        }
         return status;
     }
 
     if (needs_style) {
+        uint64_t token = prof ? hui_profiler_stage_begin(prof, HUI_PROF_STAGE_RENDER_STYLE) : 0;
         status = hui_style(ctx);
+        if (prof) hui_profiler_stage_end(prof, HUI_PROF_STAGE_RENDER_STYLE, token);
         if (status != HUI_OK) goto render_end;
     }
     if (needs_layout) {
+        uint64_t token = prof ? hui_profiler_stage_begin(prof, HUI_PROF_STAGE_RENDER_LAYOUT) : 0;
         status = hui_layout(ctx, &normalized);
+        if (prof) hui_profiler_stage_end(prof, HUI_PROF_STAGE_RENDER_LAYOUT, token);
         if (status != HUI_OK) goto render_end;
     }
     if (needs_paint) {
+        uint64_t token = prof ? hui_profiler_stage_begin(prof, HUI_PROF_STAGE_RENDER_PAINT) : 0;
         status = hui_paint(ctx);
+        if (prof) hui_profiler_stage_end(prof, HUI_PROF_STAGE_RENDER_PAINT, token);
         if (status != HUI_OK) goto render_end;
         ctx->draw_valid = 1;
         ctx->draw_version++;
@@ -2576,6 +2604,18 @@ render_end:
     local_out.draw.items = ctx->draw.cmds.data;
     local_out.draw.count = ctx->draw.cmds.len;
     if (out) *out = local_out;
+    if (prof) {
+        hui_profiler_capture_render(prof,
+                                    ctx->dom.nodes.len,
+                                    ctx->draw.cmds.len,
+                                    ctx->auto_text_fields.len,
+                                    ctx->auto_select_fields.len,
+                                    ctx->bindings.len,
+                                    pending_dirty,
+                                    ctx->dirty_flags & HUI_DIRTY_ALL,
+                                    local_out.changed);
+        hui_profiler_stage_end(prof, HUI_PROF_STAGE_RENDER_TOTAL, render_total_token);
+    }
     return status;
 }
 
@@ -2766,10 +2806,39 @@ uint32_t hui_process_input(hui_ctx *ctx) {
 
 uint32_t hui_step(hui_ctx *ctx, float dt) {
     if (!ctx) return 0u;
-    uint32_t dirty = hui_process_input(ctx);
+    struct hui_profiler *prof = ctx->profiler;
+    if (prof) {
+        hui_profiler_frame_tick(prof);
+    }
+    uint64_t step_total_token = prof ? hui_profiler_stage_begin(prof, HUI_PROF_STAGE_STEP_TOTAL) : 0;
+    uint32_t dirty = 0;
+
+    uint64_t token = prof ? hui_profiler_stage_begin(prof, HUI_PROF_STAGE_STEP_INPUT) : 0;
+    dirty |= hui_process_input(ctx);
+    if (prof) hui_profiler_stage_end(prof, HUI_PROF_STAGE_STEP_INPUT, token);
+
+    token = prof ? hui_profiler_stage_begin(prof, HUI_PROF_STAGE_STEP_AUTO_TEXT) : 0;
     dirty |= hui_auto_text_fields_step(ctx, dt);
+    if (prof) hui_profiler_stage_end(prof, HUI_PROF_STAGE_STEP_AUTO_TEXT, token);
+
+    token = prof ? hui_profiler_stage_begin(prof, HUI_PROF_STAGE_STEP_AUTO_SELECT) : 0;
     dirty |= hui_auto_select_fields_step(ctx, dt);
+    if (prof) hui_profiler_stage_end(prof, HUI_PROF_STAGE_STEP_AUTO_SELECT, token);
+
+    token = prof ? hui_profiler_stage_begin(prof, HUI_PROF_STAGE_STEP_BINDINGS) : 0;
     dirty |= hui_binding_sync_ctx(ctx);
+    if (prof) hui_profiler_stage_end(prof, HUI_PROF_STAGE_STEP_BINDINGS, token);
+
+    if (prof) {
+        hui_profiler_stage_end(prof, HUI_PROF_STAGE_STEP_TOTAL, step_total_token);
+        hui_profiler_capture_step(prof,
+                                  dirty,
+                                  dt * 1000.0f,
+                                  ctx->input_events.len,
+                                  ctx->text_input.len,
+                                  ctx->key_pressed.len,
+                                  ctx->key_released.len);
+    }
     hui_ctx_accumulate_dirty(ctx, dirty);
     return dirty;
 }

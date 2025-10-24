@@ -142,6 +142,8 @@ hui_ctx *hui_create(void * (*alloc_fn)(size_t), void (*free_fn)(void *));
 
 void hui_destroy(hui_ctx *ctx);
 
+void hui_enable_profiler(hui_ctx *ctx, void *native_window_handle);
+
 void hui_set_dom_filter(hui_ctx *ctx, hui_dom_filter_fn fn, void *user);
 
 void hui_set_filter_spec(hui_ctx *ctx, const hui_filter_spec *spec);

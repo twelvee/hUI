@@ -17,6 +17,7 @@ file(GLOB SRC
     src/paint/*.c
     src/ir/*.c
 )
+list(APPEND SRC src/hui_profiler.c)
 
 add_library(hui STATIC ${SRC})
 target_include_directories(hui PUBLIC include src)
