@@ -29,6 +29,33 @@ enum {
     HUI_NODE_TF_MULTILINE = 1u << 5
 };
 
+typedef enum {
+    HUI_ACTION_ARG_LITERAL = 0,
+    HUI_ACTION_ARG_BINDING = 1
+} hui_action_arg_type;
+
+typedef struct {
+    hui_action_arg_type type;
+    const char *value;
+    size_t value_len;
+    hui_atom binding_atom;
+} hui_action_arg;
+
+typedef struct {
+    hui_action_arg *data;
+    size_t len;
+    size_t cap;
+} hui_action_arg_vec;
+
+typedef struct {
+    hui_atom event_atom;
+    const char *expr;
+    uint32_t expr_len;
+    hui_atom action_atom;
+    hui_action_arg_vec args;
+    uint8_t parsed;
+} hui_dom_event_handler;
+
 typedef struct hui_dom_node {
     uint32_t gen;
     uint32_t parent;
@@ -65,6 +92,7 @@ typedef struct hui_dom_node {
     uint32_t tf_sel_end;
     float tf_scroll_x;
     float tf_scroll_y;
+    HUI_VEC(hui_dom_event_handler) events;
 } hui_dom_node;
 
 typedef struct {

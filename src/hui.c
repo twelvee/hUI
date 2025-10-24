@@ -12,7 +12,7 @@
 #include "ir/hui_ir.h"
 
 #include <stdlib.h>
-#include <string.h>
+#include <string.h>`r`n#include <stddef.h>
 #include <stdio.h>
 #include <ctype.h>
 #include <math.h>
@@ -56,10 +56,17 @@ typedef struct {
     uint32_t binding_index;
 } hui_auto_text_field;
 
+typedef enum {
+    HUI_BOUND_TOKEN_BINDING = 0,
+    HUI_BOUND_TOKEN_CALL = 1
+} hui_bound_text_token_kind;
+
 typedef struct {
     size_t start;
     size_t end;
+    hui_bound_text_token_kind kind;
     hui_atom atom;
+    hui_action_arg_vec args;
 } hui_bound_text_token;
 
 typedef struct {
@@ -78,6 +85,12 @@ typedef struct {
     char *src_path;
     hui_font_id id;
 } hui_font_entry;
+
+typedef struct {
+    hui_atom name;
+    hui_action_callback callback;
+    void *user;
+} hui_action_entry;
 
 static void hui_auto_text_fields_reset(hui_ctx *ctx);
 
@@ -148,6 +161,21 @@ static void hui_ctx_accumulate_dirty(hui_ctx *ctx, uint32_t flags);
 static hui_build_opts hui_normalize_build_opts(const hui_build_opts *opts);
 
 static int hui_render_opts_equal(const hui_ctx *ctx, const hui_build_opts *opts);
+
+static int hui_parse_action_call_from_mustache(hui_ctx *ctx, const char *text, size_t len,
+                                               hui_atom *out_action, hui_action_arg_vec *out_args);
+
+static int hui_parse_action_call_raw(hui_ctx *ctx, const char *expr, size_t len,
+                                     hui_atom *out_action, hui_action_arg_vec *out_args);
+
+static int hui_action_find_entry(const hui_ctx *ctx, hui_atom name);
+
+static int hui_action_execute(hui_ctx *ctx, hui_atom action_atom, const hui_action_arg_vec *args,
+                              const char **out_value, size_t *out_length);
+
+static void hui_action_arg_vec_clear(hui_action_arg_vec *args);
+
+static int hui_event_handler_ensure_parsed(hui_ctx *ctx, hui_dom_event_handler *handler);
 
 void hui_dom_invalidate_text_cache(hui_dom_node *node) {
     if (!node) return;
@@ -298,6 +326,11 @@ struct hui_ctx {
 
     HUI_VEC(hui_bound_text_template) bound_texts;
 
+    HUI_VEC(hui_action_entry) actions;
+
+    char *action_result_buffer;
+    size_t action_result_capacity;
+
     struct {
         hui_clipboard_iface clipboard;
         int clipboard_set;
@@ -328,6 +361,34 @@ struct hui_ctx {
 
 static void hui_set_error(hui_ctx *ctx, const char *msg) {
     snprintf(ctx->last_error, sizeof(ctx->last_error), "%s", msg);
+}
+
+static hui_atom hui_intern_event_name(hui_ctx *ctx, const char *name, size_t len) {
+    if (!ctx || !name || len == 0) return 0;
+    size_t start = 0;
+    size_t end = len;
+    while (start < end && isspace((unsigned char) name[start])) start++;
+    while (end > start && isspace((unsigned char) name[end - 1])) end--;
+    if (end <= start) return 0;
+    if (end - start > 2 &&
+        (name[start] == 'o' || name[start] == 'O') &&
+        (name[start + 1] == 'n' || name[start + 1] == 'N')) {
+        start += 2;
+    }
+    if (end <= start) return 0;
+    size_t norm_len = end - start;
+    char stack_buf[64];
+    char *buf = stack_buf;
+    if (norm_len >= sizeof(stack_buf)) {
+        buf = (char *) ctx->alloc_fn(norm_len + 1);
+        if (!buf) return 0;
+    }
+    for (size_t i = 0; i < norm_len; i++) {
+        buf[i] = (char) tolower((unsigned char) name[start + i]);
+    }
+    hui_atom atom = hui_intern_put(&ctx->atoms, buf, norm_len);
+    if (buf != stack_buf) ctx->free_fn(buf);
+    return atom;
 }
 
 static void hui_ctx_accumulate_dirty(hui_ctx *ctx, uint32_t flags) {
@@ -363,12 +424,314 @@ static const char *hui_binding_string_for_atom(const hui_ctx *ctx, hui_atom atom
     return entry->string_value;
 }
 
+static void hui_action_arg_vec_clear(hui_action_arg_vec *args) {
+    if (!args) return;
+    args->len = 0;
+}
+
+static void hui_trim_range(const char *text, size_t len, size_t *start, size_t *end) {
+    size_t s = start ? *start : 0;
+    size_t e = end ? *end : len;
+    if (s > len) s = len;
+    if (e > len) e = len;
+    while (s < e && isspace((unsigned char) text[s])) s++;
+    while (e > s && isspace((unsigned char) text[e - 1])) e--;
+    if (start) *start = s;
+    if (end) *end = e;
+}
+
+static void hui_parse_action_arg(hui_ctx *ctx, const char *expr, size_t start, size_t end,
+                                 hui_action_arg_vec *out_args) {
+    if (!ctx || !expr || !out_args) return;
+    size_t s = start;
+    size_t e = end;
+    hui_trim_range(expr, e, &s, &e);
+    if (e <= s) return;
+    hui_action_arg arg;
+    memset(&arg, 0, sizeof(arg));
+    if ((expr[s] == '"' && expr[e - 1] == '"') || (expr[s] == '\'' && expr[e - 1] == '\'')) {
+        arg.type = HUI_ACTION_ARG_LITERAL;
+        if (e - s >= 2) {
+            arg.value = expr + s + 1;
+            arg.value_len = (e - s) >= 2 ? (e - s - 2) : 0;
+        } else {
+            arg.value = "";
+            arg.value_len = 0;
+        }
+    } else {
+        int ident = 1;
+        for (size_t i = s; i < e; i++) {
+            char ch = expr[i];
+            if (!(isalnum((unsigned char) ch) || ch == '_' || ch == '-')) {
+                ident = 0;
+                break;
+            }
+        }
+        if (ident) {
+            arg.type = HUI_ACTION_ARG_BINDING;
+            arg.binding_atom = hui_intern_put(&ctx->atoms, expr + s, e - s);
+        } else {
+            arg.type = HUI_ACTION_ARG_LITERAL;
+            arg.value = expr + s;
+            arg.value_len = e - s;
+        }
+    }
+    hui_vec_push(out_args, arg);
+}
+
+static int hui_parse_action_call_raw(hui_ctx *ctx, const char *expr, size_t len,
+                                     hui_atom *out_action, hui_action_arg_vec *out_args) {
+    if (out_action) *out_action = 0;
+    if (!ctx || !expr || len == 0) return HUI_EINVAL;
+    size_t start = 0;
+    size_t end = len;
+    hui_trim_range(expr, len, &start, &end);
+    if (end <= start) return HUI_EINVAL;
+
+    size_t open = SIZE_MAX;
+    int quote = 0;
+    for (size_t i = start; i < end; i++) {
+        char c = expr[i];
+        if (quote) {
+            if (c == quote) quote = 0;
+            else if (c == '\\' && i + 1 < end) i++;
+            continue;
+        }
+        if (c == '"' || c == '\'') {
+            quote = c;
+            continue;
+        }
+        if (c == '(') {
+            open = i;
+            break;
+        }
+    }
+    if (open == SIZE_MAX) return HUI_EINVAL;
+
+    size_t name_start = start;
+    size_t name_end = open;
+    hui_trim_range(expr, len, &name_start, &name_end);
+    if (name_end <= name_start) return HUI_EINVAL;
+    for (size_t i = name_start; i < name_end; i++) {
+        char c = expr[i];
+        if (!(isalnum((unsigned char) c) || c == '_' || c == '-')) {
+            return HUI_EINVAL;
+        }
+    }
+
+    size_t close = SIZE_MAX;
+    quote = 0;
+    int depth = 0;
+    for (size_t i = open; i < end; i++) {
+        char c = expr[i];
+        if (quote) {
+            if (c == quote) quote = 0;
+            else if (c == '\\' && i + 1 < end) i++;
+            continue;
+        }
+        if (c == '"' || c == '\'') {
+            quote = c;
+            continue;
+        }
+        if (c == '(') {
+            depth++;
+            continue;
+        }
+        if (c == ')') {
+            if (depth == 0) return HUI_EINVAL;
+            depth--;
+            if (depth == 0) {
+                close = i;
+                break;
+            }
+            continue;
+        }
+    }
+    if (close == SIZE_MAX) return HUI_EINVAL;
+
+    for (size_t i = close + 1; i < end; i++) {
+        if (!isspace((unsigned char) expr[i])) return HUI_EINVAL;
+    }
+
+    hui_atom action_atom = hui_intern_put(&ctx->atoms, expr + name_start, name_end - name_start);
+    if (!action_atom) return HUI_EINVAL;
+    if (out_action) *out_action = action_atom;
+
+    if (!out_args) return HUI_OK;
+    hui_action_arg_vec_clear(out_args);
+
+    size_t arg_start = open + 1;
+    quote = 0;
+    depth = 0;
+    for (size_t i = open + 1; i < close; i++) {
+        char c = expr[i];
+        if (quote) {
+            if (c == quote) quote = 0;
+            else if (c == '\\' && i + 1 < close) i++;
+            continue;
+        }
+        if (c == '"' || c == '\'') {
+            quote = c;
+            continue;
+        }
+        if (c == '(') {
+            depth++;
+            continue;
+        }
+        if (c == ')') {
+            if (depth > 0) depth--;
+            continue;
+        }
+        if (c == ',' && depth == 0) {
+            hui_parse_action_arg(ctx, expr, arg_start, i, out_args);
+            arg_start = i + 1;
+        }
+    }
+    hui_parse_action_arg(ctx, expr, arg_start, close, out_args);
+    return HUI_OK;
+}
+
+static int hui_parse_action_call_from_mustache(hui_ctx *ctx, const char *text, size_t len,
+                                               hui_atom *out_action, hui_action_arg_vec *out_args) {
+    if (out_action) *out_action = 0;
+    if (!ctx || !text || len < 4) return HUI_EINVAL;
+    size_t start = 0;
+    size_t end = len;
+    hui_trim_range(text, len, &start, &end);
+    if (end <= start || end - start < 4) return HUI_EINVAL;
+    if (!(text[start] == '{' && text[start + 1] == '{' &&
+          text[end - 2] == '}' && text[end - 1] == '}')) {
+        return HUI_EINVAL;
+    }
+    start += 2;
+    end -= 2;
+    hui_trim_range(text, len, &start, &end);
+    if (end <= start) return HUI_EINVAL;
+    return hui_parse_action_call_raw(ctx, text + start, end - start, out_action, out_args);
+}
+
+static int hui_action_find_entry(const hui_ctx *ctx, hui_atom name) {
+    if (!ctx || name == 0) return -1;
+    for (size_t i = 0; i < ctx->actions.len; i++) {
+        if (ctx->actions.data[i].name == name) return (int) i;
+    }
+    return -1;
+}
+
+static int hui_action_execute(hui_ctx *ctx, hui_atom action_atom, const hui_action_arg_vec *args,
+                              const char **out_value, size_t *out_length) {
+    if (out_value) *out_value = "";
+    if (out_length) *out_length = 0;
+    if (!ctx || action_atom == 0) return HUI_EINVAL;
+
+    int idx = hui_action_find_entry(ctx, action_atom);
+    if (idx < 0) {
+        uint32_t name_len = 0;
+        const char *name = hui_intern_str(&ctx->atoms, action_atom, &name_len);
+        if (!name) name = "(unknown)";
+        char buffer[96];
+        snprintf(buffer, sizeof(buffer), "action '%.*s' not bound", (int) name_len, name);
+        hui_set_error(ctx, buffer);
+        return HUI_EINVAL;
+    }
+    hui_action_entry *entry = &ctx->actions.data[idx];
+    if (!entry->callback) return HUI_EINVAL;
+
+    size_t arg_count = args ? args->len : 0;
+    const size_t stack_cap = 4;
+    hui_action_value stack_args[stack_cap];
+    hui_action_value *values = stack_args;
+    hui_action_value *heap_values = NULL;
+    if (arg_count > stack_cap) {
+        heap_values = (hui_action_value *) ctx->alloc_fn(arg_count * sizeof(hui_action_value));
+        if (!heap_values) return HUI_ENOMEM;
+        values = heap_values;
+    }
+    for (size_t i = 0; i < arg_count; i++) {
+        const hui_action_arg *arg = &args->data[i];
+        const char *val = "";
+        size_t vlen = 0;
+        if (arg->type == HUI_ACTION_ARG_BINDING) {
+            val = hui_binding_string_for_atom(ctx, arg->binding_atom, &vlen);
+        } else if (arg->type == HUI_ACTION_ARG_LITERAL) {
+            val = arg->value ? arg->value : "";
+            vlen = arg->value_len;
+        }
+        values[i].value = val;
+        values[i].length = vlen;
+    }
+
+    hui_action_value result = {0};
+    int rc = entry->callback(ctx, entry->user, arg_count ? values : NULL, arg_count, &result);
+    if (heap_values) ctx->free_fn(heap_values);
+    if (rc != HUI_OK) {
+        uint32_t name_len = 0;
+        const char *name = hui_intern_str(&ctx->atoms, action_atom, &name_len);
+        if (!name) name = "(unknown)";
+        char buffer[96];
+        snprintf(buffer, sizeof(buffer), "action '%.*s' failed", (int) name_len, name);
+        hui_set_error(ctx, buffer);
+        return rc;
+    }
+
+    const char *res_value = result.value ? result.value : "";
+    size_t res_len = result.length;
+    if (res_len == 0 && res_value[0] != '\0') {
+        res_len = strlen(res_value);
+    }
+    size_t needed = res_len + 1;
+    if (ctx->action_result_capacity < needed || !ctx->action_result_buffer) {
+        char *buffer = (char *) ctx->alloc_fn(needed);
+        if (!buffer) return HUI_ENOMEM;
+        if (ctx->action_result_buffer) ctx->free_fn(ctx->action_result_buffer);
+        ctx->action_result_buffer = buffer;
+        ctx->action_result_capacity = needed;
+    }
+    if (res_len > 0) {
+        memcpy(ctx->action_result_buffer, res_value, res_len);
+    }
+    ctx->action_result_buffer[res_len] = '\0';
+    if (out_value) *out_value = ctx->action_result_buffer ? ctx->action_result_buffer : "";
+    if (out_length) *out_length = res_len;
+    return HUI_OK;
+}
+
+static int hui_event_handler_ensure_parsed(hui_ctx *ctx, hui_dom_event_handler *handler) {
+    if (!ctx || !handler) return HUI_EINVAL;
+    if (handler->parsed) return HUI_OK;
+    hui_action_arg_vec_clear(&handler->args);
+    handler->action_atom = 0;
+    if (!handler->expr || handler->expr_len == 0) return HUI_EINVAL;
+    const char *expr = handler->expr;
+    size_t len = handler->expr_len;
+    size_t start = 0;
+    size_t end = len;
+    hui_trim_range(expr, len, &start, &end);
+    if (end <= start) return HUI_EINVAL;
+
+    int r = HUI_EINVAL;
+    if (end - start >= 4 && expr[start] == '{' && expr[start + 1] == '{') {
+        r = hui_parse_action_call_from_mustache(ctx, expr + start, end - start,
+                                                &handler->action_atom, &handler->args);
+    } else {
+        r = hui_parse_action_call_raw(ctx, expr + start, end - start,
+                                      &handler->action_atom, &handler->args);
+    }
+    if (r != HUI_OK) return r;
+    handler->parsed = 1;
+    return HUI_OK;
+}
+
 static void hui_bound_texts_reset(hui_ctx *ctx) {
     if (!ctx) return;
     for (size_t i = 0; i < ctx->bound_texts.len; i++) {
         hui_bound_text_template *templ = &ctx->bound_texts.data[i];
         if (templ->template_str) ctx->free_fn(templ->template_str);
         if (templ->rendered) ctx->free_fn(templ->rendered);
+        for (size_t t = 0; t < templ->tokens.len; t++) {
+            hui_bound_text_token *tok = &templ->tokens.data[t];
+            hui_vec_free(&tok->args);
+        }
         hui_vec_free(&templ->tokens);
         templ->template_str = NULL;
         templ->rendered = NULL;
@@ -379,6 +742,23 @@ static void hui_bound_texts_reset(hui_ctx *ctx) {
     ctx->bound_texts.len = 0;
 }
 
+static int hui_bound_template_reserve(hui_ctx *ctx, hui_bound_text_template *templ, size_t needed) {
+    if (!ctx || !templ) return -1;
+    if (templ->rendered_cap >= needed) return 0;
+    size_t new_cap = templ->rendered_cap ? templ->rendered_cap : 64;
+    while (new_cap < needed) new_cap *= 2;
+    char *buffer = (char *) ctx->alloc_fn(new_cap);
+    if (!buffer) return -1;
+    if (templ->rendered && templ->rendered_len > 0)
+        memcpy(buffer, templ->rendered, templ->rendered_len);
+    if (templ->rendered)
+        ctx->free_fn(templ->rendered);
+    templ->rendered = buffer;
+    templ->rendered_cap = new_cap;
+    return 0;
+}
+
+
 static uint32_t hui_bound_text_apply_index(hui_ctx *ctx, uint32_t template_index) {
     if (!ctx || template_index >= ctx->bound_texts.len) return 0;
     hui_bound_text_template *templ = &ctx->bound_texts.data[template_index];
@@ -386,36 +766,27 @@ static uint32_t hui_bound_text_apply_index(hui_ctx *ctx, uint32_t template_index
     if (templ->node_index >= ctx->dom.nodes.len) return 0;
     const char *src = templ->template_str;
     size_t cursor = 0;
-    size_t required = 0;
-    for (size_t i = 0; i < templ->tokens.len; i++) {
-        hui_bound_text_token *tok = &templ->tokens.data[i];
-        if (tok->start > cursor) required += tok->start - cursor;
-        size_t value_len = 0;
-        (void) hui_binding_string_for_atom(ctx, tok->atom, &value_len);
-        required += value_len;
-        cursor = tok->end;
-    }
-    required += templ->template_len - cursor;
-    if (templ->rendered_cap < required + 1) {
-        size_t new_cap = required + 1;
-        char *new_buf = (char *) ctx->alloc_fn(new_cap);
-        if (!new_buf) return 0;
-        if (templ->rendered) ctx->free_fn(templ->rendered);
-        templ->rendered = new_buf;
-        templ->rendered_cap = new_cap;
-    }
-    cursor = 0;
     size_t out = 0;
     for (size_t i = 0; i < templ->tokens.len; i++) {
         hui_bound_text_token *tok = &templ->tokens.data[i];
         if (tok->start > cursor) {
             size_t lit_len = tok->start - cursor;
+            if (hui_bound_template_reserve(ctx, templ, out + lit_len + 1) != 0) return 0;
             memcpy(templ->rendered + out, src + cursor, lit_len);
             out += lit_len;
         }
+        const char *value = "";
         size_t value_len = 0;
-        const char *value = hui_binding_string_for_atom(ctx, tok->atom, &value_len);
+        if (tok->kind == HUI_BOUND_TOKEN_BINDING) {
+            value = hui_binding_string_for_atom(ctx, tok->atom, &value_len);
+        } else if (tok->kind == HUI_BOUND_TOKEN_CALL) {
+            if (hui_action_execute(ctx, tok->atom, &tok->args, &value, &value_len) != HUI_OK) {
+                value = "";
+                value_len = 0;
+            }
+        }
         if (value_len > 0) {
+            if (hui_bound_template_reserve(ctx, templ, out + value_len + 1) != 0) return 0;
             memcpy(templ->rendered + out, value, value_len);
             out += value_len;
         }
@@ -423,9 +794,11 @@ static uint32_t hui_bound_text_apply_index(hui_ctx *ctx, uint32_t template_index
     }
     if (templ->template_len > cursor) {
         size_t tail = templ->template_len - cursor;
+        if (hui_bound_template_reserve(ctx, templ, out + tail + 1) != 0) return 0;
         memcpy(templ->rendered + out, src + cursor, tail);
         out += tail;
     }
+    if (hui_bound_template_reserve(ctx, templ, out + 1) != 0) return 0;
     templ->rendered[out] = '\0';
     templ->rendered_len = out;
     hui_dom_node *node = &ctx->dom.nodes.data[templ->node_index];
@@ -448,15 +821,13 @@ static size_t hui_bound_text_prepare_node(hui_ctx *ctx, uint32_t node_index, hui
             size_t close = pos + 2;
             while (close + 1 < len && !(text[close] == '}' && text[close + 1] == '}')) close++;
             if (close + 1 >= len) break;
-            size_t segment_len = (close + 2) - pos;
-            hui_atom atom = hui_binding_atom_from_mustache(ctx, text + pos, segment_len);
-            if (atom) {
-                hui_bound_text_token tok;
-                tok.start = pos;
-                tok.end = close + 2;
-                tok.atom = atom;
-                hui_vec_push(&tokens, tok);
-            }
+            hui_bound_text_token tok;
+            memset(&tok, 0, sizeof(tok));
+            tok.start = pos;
+            tok.end = close + 2;
+            tok.kind = HUI_BOUND_TOKEN_BINDING;
+            hui_vec_init(&tok.args);
+            hui_vec_push(&tokens, tok);
             pos = close + 2;
         } else {
             pos++;
@@ -473,12 +844,15 @@ static size_t hui_bound_text_prepare_node(hui_ctx *ctx, uint32_t node_index, hui
     if (tokens.len == 1) {
         hui_bound_text_token tok = tokens.data[0];
         if (tok.start == trimmed_start && tok.end == trimmed_end) {
-            node->binding_text_atom = tok.atom;
-            node->text = "";
-            node->text_len = 0;
-            hui_dom_invalidate_text_cache(node);
-            hui_vec_free(&tokens);
-            return 1;
+            hui_atom moustache = hui_binding_atom_from_mustache(ctx, text + tok.start, tok.end - tok.start);
+            if (moustache) {
+                node->binding_text_atom = moustache;
+                node->text = "";
+                node->text_len = 0;
+                hui_dom_invalidate_text_cache(node);
+                hui_vec_free(&tokens);
+                return 1;
+            }
         }
     }
 
@@ -488,6 +862,9 @@ static size_t hui_bound_text_prepare_node(hui_ctx *ctx, uint32_t node_index, hui
     templ.template_len = len;
     templ.template_str = (char *) ctx->alloc_fn(len + 1);
     if (!templ.template_str) {
+        for (size_t i = 0; i < tokens.len; i++) {
+            hui_vec_free(&tokens.data[i].args);
+        }
         hui_vec_free(&tokens);
         return tokens.len;
     }
@@ -495,11 +872,36 @@ static size_t hui_bound_text_prepare_node(hui_ctx *ctx, uint32_t node_index, hui
     templ.template_str[len] = '\0';
     hui_vec_init(&templ.tokens);
     for (size_t i = 0; i < tokens.len; i++) {
-        hui_vec_push(&templ.tokens, tokens.data[i]);
+        hui_bound_text_token tok = tokens.data[i];
+        tok.kind = HUI_BOUND_TOKEN_BINDING;
+        tok.atom = 0;
+        tok.args.data = NULL;
+        tok.args.len = 0;
+        tok.args.cap = 0;
+        hui_vec_push(&templ.tokens, tok);
     }
     templ.rendered = NULL;
     templ.rendered_len = 0;
     templ.rendered_cap = 0;
+
+    for (size_t i = 0; i < templ.tokens.len; i++) {
+        hui_bound_text_token *tt = &templ.tokens.data[i];
+        hui_action_arg_vec_clear(&tt->args);
+        tt->atom = hui_binding_atom_from_mustache(ctx, templ.template_str + tt->start,
+                                                  tt->end - tt->start);
+        if (tt->atom) {
+            tt->kind = HUI_BOUND_TOKEN_BINDING;
+            continue;
+        }
+        if (hui_parse_action_call_from_mustache(ctx, templ.template_str + tt->start,
+                                                tt->end - tt->start, &tt->atom, &tt->args) == HUI_OK) {
+            tt->kind = HUI_BOUND_TOKEN_CALL;
+        } else {
+            tt->kind = HUI_BOUND_TOKEN_BINDING;
+            tt->atom = 0;
+            hui_action_arg_vec_clear(&tt->args);
+        }
+    }
 
     uint32_t template_index = (uint32_t) ctx->bound_texts.len;
     hui_vec_push(&ctx->bound_texts, templ);
@@ -512,7 +914,6 @@ static size_t hui_bound_text_prepare_node(hui_ctx *ctx, uint32_t node_index, hui
     hui_bound_text_apply_index(ctx, template_index);
     return ctx->bound_texts.data[template_index].tokens.len;
 }
-
 static hui_build_opts hui_normalize_build_opts(const hui_build_opts *opts) {
     hui_build_opts normalized;
     normalized.viewport_w = (opts && opts->viewport_w > 0.0f) ? opts->viewport_w : 800.0f;
@@ -702,6 +1103,7 @@ hui_ctx *hui_create(void * (*alloc_fn)(size_t), void (*free_fn)(void *)) {
     hui_vec_init(&ctx->auto_text_fields);
     hui_vec_init(&ctx->auto_select_fields);
     hui_vec_init(&ctx->bound_texts);
+    hui_vec_init(&ctx->actions);
     ctx->filter_spec.max_depth = -1;
     ctx->filter_spec.max_nodes = 0;
     ctx->filter_spec.flags = 0;
@@ -740,6 +1142,8 @@ hui_ctx *hui_create(void * (*alloc_fn)(size_t), void (*free_fn)(void *)) {
     ctx->render_cache.dpi = 0.0f;
     ctx->render_cache.flags = 0;
     ctx->render_cache.valid = 0;
+    ctx->action_result_buffer = NULL;
+    ctx->action_result_capacity = 0;
     return ctx;
 }
 
@@ -1729,10 +2133,23 @@ static void hui_binding_relink_entry(hui_ctx *ctx, size_t entry_index) {
     }
     for (size_t i = 0; i < ctx->bound_texts.len; i++) {
         const hui_bound_text_template *templ = &ctx->bound_texts.data[i];
-        for (size_t t = 0; t < templ->tokens.len; t++) {
-            if (templ->tokens.data[t].atom == entry->name) {
-                hui_binding_push_node_unique(&entry->text_nodes, templ->node_index);
-                break;
+        int linked = 0;
+        for (size_t t = 0; t < templ->tokens.len && !linked; t++) {
+            const hui_bound_text_token *tok = &templ->tokens.data[t];
+            if (tok->kind == HUI_BOUND_TOKEN_BINDING) {
+                if (tok->atom == entry->name) {
+                    hui_binding_push_node_unique(&entry->text_nodes, templ->node_index);
+                    linked = 1;
+                }
+            } else if (tok->kind == HUI_BOUND_TOKEN_CALL) {
+                for (size_t a = 0; a < tok->args.len; a++) {
+                    const hui_action_arg *arg = &tok->args.data[a];
+                    if (arg->type == HUI_ACTION_ARG_BINDING && arg->binding_atom == entry->name) {
+                        hui_binding_push_node_unique(&entry->text_nodes, templ->node_index);
+                        linked = 1;
+                        break;
+                    }
+                }
             }
         }
     }
@@ -1954,6 +2371,8 @@ void hui_destroy(hui_ctx *ctx) {
             ctx->free_fn(entry->string_value);
     }
     hui_vec_free(&ctx->bindings);
+    if (ctx->action_result_buffer) ctx->free_fn(ctx->action_result_buffer);
+    hui_vec_free(&ctx->actions);
     ctx->free_fn(ctx);
 }
 
@@ -2482,6 +2901,85 @@ int hui_unbind_variable(hui_ctx *ctx, const char *name) {
     }
     hui_ctx_accumulate_dirty(ctx, templ_dirty | HUI_DIRTY_STYLE | HUI_DIRTY_LAYOUT | HUI_DIRTY_PAINT);
     return HUI_OK;
+}
+
+int hui_bind_action(hui_ctx *ctx, const char *name, hui_action_callback callback, void *user) {
+    if (!ctx || !name || !callback) return HUI_EINVAL;
+    size_t name_len = strlen(name);
+    if (name_len == 0) return HUI_EINVAL;
+    hui_atom atom = hui_intern_put(&ctx->atoms, name, name_len);
+    int idx = hui_action_find_entry(ctx, atom);
+    if (idx >= 0) {
+        ctx->actions.data[idx].callback = callback;
+        ctx->actions.data[idx].user = user;
+        return HUI_OK;
+    }
+    hui_action_entry entry;
+    entry.name = atom;
+    entry.callback = callback;
+    entry.user = user;
+    hui_vec_push(&ctx->actions, entry);
+    return HUI_OK;
+}
+
+int hui_unbind_action(hui_ctx *ctx, const char *name) {
+    if (!ctx || !name) return HUI_EINVAL;
+    size_t name_len = strlen(name);
+    if (name_len == 0) return HUI_EINVAL;
+    hui_atom atom = hui_intern_put(&ctx->atoms, name, name_len);
+    int idx = hui_action_find_entry(ctx, atom);
+    if (idx < 0) return HUI_EINVAL;
+    for (size_t i = (size_t) idx + 1; i < ctx->actions.len; i++) {
+        ctx->actions.data[i - 1] = ctx->actions.data[i];
+    }
+    ctx->actions.len--;
+    return HUI_OK;
+}
+
+int hui_trigger_event(hui_ctx *ctx, const char *node_id, const char *event_name) {
+    if (!ctx || !node_id || !event_name) return HUI_EINVAL;
+    if (node_id[0] == '\0' || event_name[0] == '\0') return HUI_EINVAL;
+
+    hui_node_handle handle = hui_dom_query_id(ctx, node_id);
+    if (hui_node_is_null(handle) || handle.index >= ctx->dom.nodes.len) {
+        char buffer[128];
+        snprintf(buffer, sizeof(buffer), "node '%s' not found for event '%s'", node_id, event_name);
+        hui_set_error(ctx, buffer);
+        return HUI_EINVAL;
+    }
+    hui_dom_node *node = &ctx->dom.nodes.data[handle.index];
+    if (node->events.len == 0) {
+        char buffer[128];
+        snprintf(buffer, sizeof(buffer), "event '%s' not bound on node '%s'", event_name, node_id);
+        hui_set_error(ctx, buffer);
+        return HUI_EINVAL;
+    }
+
+    hui_atom event_atom = hui_intern_event_name(ctx, event_name, strlen(event_name));
+    if (event_atom == 0) {
+        char buffer[128];
+        snprintf(buffer, sizeof(buffer), "invalid event name '%s'", event_name);
+        hui_set_error(ctx, buffer);
+        return HUI_EINVAL;
+    }
+    for (size_t i = 0; i < node->events.len; i++) {
+        hui_dom_event_handler *handler = &node->events.data[i];
+        if (handler->event_atom != event_atom) continue;
+        int parse_rc = hui_event_handler_ensure_parsed(ctx, handler);
+        if (parse_rc != HUI_OK) return parse_rc;
+        if (handler->action_atom == 0) {
+            char buffer[128];
+            snprintf(buffer, sizeof(buffer), "event '%s' has no action", event_name);
+            hui_set_error(ctx, buffer);
+            return HUI_EINVAL;
+        }
+        return hui_action_execute(ctx, handler->action_atom, &handler->args, NULL, NULL);
+    }
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "event '%s' not bound on node '%s'", event_name, node_id);
+    hui_set_error(ctx, buffer);
+    return HUI_EINVAL;
 }
 
 void hui_set_text_input_defaults(hui_ctx *ctx, const hui_clipboard_iface *clipboard,

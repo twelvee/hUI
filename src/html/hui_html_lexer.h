@@ -18,6 +18,8 @@ typedef struct {
     size_t n;
 } hui_slice;
 
+#define HUI_MAX_EVENT_ATTRS 8
+
 typedef struct {
     hui_token_kind kind;
     hui_slice text;
@@ -28,6 +30,9 @@ typedef struct {
     hui_slice placeholder_attr;
     hui_slice value_attr;
     int selected_attr;
+    size_t event_attr_count;
+    hui_slice event_attr_names[HUI_MAX_EVENT_ATTRS];
+    hui_slice event_attr_values[HUI_MAX_EVENT_ATTRS];
 } hui_token;
 
 typedef struct {

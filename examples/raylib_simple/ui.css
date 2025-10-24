@@ -179,4 +179,26 @@ button {
     padding: 12px;
     font-size: 16px;
     align-self: flex-end;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background-color 0.2s ease, color 0.2s ease, transform 0.15s ease, box-shadow 0.2s ease;
+}
+
+button:hover {
+    background-color: var(--accent2, #d6fd79);
+    color: #101010;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+    transform: translateY(-1px);
+}
+
+#quit-button {
+    margin-top: 10px;
+    background-color: #ff6464;
+    color: #0f0f0f;
+}
+
+#quit-button:hover {
+    background-color: #ff8383;
+    color: #000000;
 }

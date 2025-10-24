@@ -28,6 +28,24 @@ static Color hui_color_from_argb(uint32_t argb) {
     return color;
 }
 
+static int demo_quit_action(hui_ctx *ctx, void *user,
+                            const hui_action_value *args, size_t arg_count,
+                            hui_action_value *out_result) {
+    (void) ctx;
+    (void) args;
+    (void) arg_count;
+    if (out_result) {
+        out_result->value = "";
+        out_result->length = 0;
+    }
+    if (user) {
+        int *flag = (int *) user;
+        *flag = 1;
+    }
+    TraceLog(LOG_INFO, "Quit requested from UI");
+    return HUI_OK;
+}
+
 static Font example_get_font(hui_ctx *ctx, const hui_draw *cmd) {
     const hui_font_resource *res = hui_draw_font(ctx, cmd);
     if (!res) return GetFontDefault();
@@ -161,6 +179,11 @@ typedef struct {
     uint32_t buttons;
     int inside;
 } pointer_state;
+
+static int hui_handles_equal(hui_node_handle a, hui_node_handle b) {
+    return !hui_node_is_null(a) && !hui_node_is_null(b) &&
+           a.index == b.index && a.gen == b.gen;
+}
 
 static uint32_t read_pointer_buttons(void) {
     uint32_t buttons = 0;
@@ -323,6 +346,11 @@ int main(void) {
     hui_bind_variable(ctx, "topic_value", &topic_binding);
     hui_bind_variable(ctx, "message_value", &message_binding);
 
+    int quit_requested = 0;
+    if (hui_bind_action(ctx, "quitApp", demo_quit_action, &quit_requested) != HUI_OK) {
+        TraceLog(LOG_WARNING, "Failed to bind quit action: %s", hui_last_error(ctx));
+    }
+
     const hui_clipboard_iface clipboard = {
         .get_text = raylib_clipboard_get,
         .set_text = raylib_clipboard_set,
@@ -383,6 +411,11 @@ int main(void) {
         return 1;
     }
 
+    hui_node_handle quit_button_handle = hui_dom_query_id(ctx, "quit-button");
+    if (hui_node_is_null(quit_button_handle)) {
+        TraceLog(LOG_WARNING, "Quit button not found in DOM; quit action will be disabled");
+    }
+
     pointer_state pointer = {{-1.0f, -1.0f}, 0u, 0};
     hui_build_opts opts = {(float) GetRenderWidth(), (float) GetRenderHeight(), 96.0f, 0};
 
@@ -421,6 +454,22 @@ int main(void) {
 
         float frame_dt = GetFrameTime();
         hui_step(ctx, frame_dt);
+
+        const hui_input_state *input_state = hui_input_get_state(ctx);
+        if (input_state && (input_state->pointer_released & HUI_POINTER_BUTTON_PRIMARY)) {
+            if (!hui_node_is_null(quit_button_handle) &&
+                hui_handles_equal(input_state->hovered, quit_button_handle)) {
+                int rc = hui_trigger_event(ctx, "quit-button", "click");
+                if (rc != HUI_OK) {
+                    TraceLog(LOG_WARNING, "Triggering quit button failed: %s", hui_last_error(ctx));
+                }
+            }
+        }
+
+        if (quit_requested) {
+            TraceLog(LOG_INFO, "Exiting main loop after quit action");
+            break;
+        }
 
         int ctx_dirty = hui_has_dirty(ctx);
         if (texture_reset || ctx_dirty) {

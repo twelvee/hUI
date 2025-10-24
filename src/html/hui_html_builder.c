@@ -2,7 +2,9 @@
 #include "hui_html_lexer.h"
 #include "hui_err.h"
 
+#include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 static int hui_atom_in_class_list(const char *raw, size_t len, hui_intern *atoms, hui_atom atom) {
     if (!raw || len == 0 || atom == 0) return 0;
@@ -20,6 +22,34 @@ static int hui_atom_in_class_list(const char *raw, size_t len, hui_intern *atoms
     return 0;
 }
 
+static hui_atom hui_builder_intern_event(hui_intern *atoms, hui_slice name) {
+    if (!atoms || !name.p || name.n == 0) return 0;
+    size_t start = 0;
+    size_t end = name.n;
+    while (start < end && isspace((unsigned char) name.p[start])) start++;
+    while (end > start && isspace((unsigned char) name.p[end - 1])) end--;
+    if (end <= start) return 0;
+    if (end - start > 2 &&
+        (name.p[start] == 'o' || name.p[start] == 'O') &&
+        (name.p[start + 1] == 'n' || name.p[start + 1] == 'N')) {
+        start += 2;
+    }
+    if (end <= start) return 0;
+    size_t len = end - start;
+    char stack_buf[64];
+    char *buf = stack_buf;
+    if (len >= sizeof(stack_buf)) {
+        buf = (char *) malloc(len + 1);
+        if (!buf) return 0;
+    }
+    for (size_t i = 0; i < len; i++) {
+        buf[i] = (char) tolower((unsigned char) name.p[start + i]);
+    }
+    hui_atom atom = hui_intern_put(atoms, buf, len);
+    if (buf != stack_buf) free(buf);
+    return atom;
+}
+
 void hui_dom_init(hui_dom *dom) {
     hui_arena_init(&dom->arena, 64 * 1024);
     hui_vec_init(&dom->nodes);
@@ -34,6 +64,15 @@ void hui_dom_init(hui_dom *dom) {
 
 void hui_dom_reset(hui_dom *dom) {
     hui_arena_reset(&dom->arena);
+    for (size_t i = 0; i < dom->nodes.len; i++) {
+        hui_dom_node *node = &dom->nodes.data[i];
+        hui_vec_free(&node->classes);
+        for (size_t ev = 0; ev < node->events.len; ev++) {
+            hui_dom_event_handler *handler = &node->events.data[ev];
+            hui_vec_free(&handler->args);
+        }
+        hui_vec_free(&node->events);
+    }
     hui_vec_free(&dom->nodes);
     hui_vec_free(&dom->id_keys);
     hui_vec_free(&dom->id_vals);
@@ -54,6 +93,7 @@ uint32_t hui_dom_add_node(hui_dom *dom, hui_node_type type) {
     node.next_sibling = 0xFFFFFFFFu;
     node.gen = 1;
     hui_vec_init(&node.classes);
+    hui_vec_init(&node.events);
     node.binding_text_atom = 0;
     node.binding_value_atom = 0;
     node.binding_text_index = 0xFFFFFFFFu;
@@ -230,6 +270,22 @@ int hui_build_from_html(hui_builder *builder, const char *html, size_t html_len)
                         node->attr_value_len = (uint32_t) token.value_attr.n;
                     }
                     node->attr_selected = (uint8_t) (token.selected_attr != 0);
+                    for (size_t ev = 0; ev < token.event_attr_count; ev++) {
+                        hui_slice name = token.event_attr_names[ev];
+                        hui_slice value = token.event_attr_values[ev];
+                        if (!name.p || name.n == 0) continue;
+                        hui_atom event_atom = hui_builder_intern_event(builder->atoms, name);
+                        if (!event_atom) continue;
+                        hui_dom_event_handler handler;
+                        memset(&handler, 0, sizeof(handler));
+                        handler.event_atom = event_atom;
+                        handler.expr = value.p;
+                        handler.expr_len = (uint32_t) value.n;
+                        handler.action_atom = 0;
+                        handler.parsed = 0;
+                        hui_vec_init(&handler.args);
+                        hui_vec_push(&node->events, handler);
+                    }
                     if (probe.class_list) {
                         const char *p = probe.class_list;
                         size_t n = probe.class_list_len;

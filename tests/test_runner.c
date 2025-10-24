@@ -45,6 +45,40 @@ static void test_clipboard_set(void *user, const char *text) {
     clip->buffer[len] = '\0';
 }
 
+typedef struct {
+    const char *result;
+    size_t called;
+    char last_arg[64];
+} action_test_data;
+
+static int test_action_callback(hui_ctx *ctx, void *user,
+                                const hui_action_value *args, size_t arg_count,
+                                hui_action_value *out_result) {
+    (void) ctx;
+    action_test_data *data = (action_test_data *) user;
+    if (!data || !out_result) return HUI_EINVAL;
+    data->called++;
+    data->last_arg[0] = '\0';
+    if (arg_count > 0 && args) {
+        size_t copy_len = args[0].length;
+        if (copy_len >= sizeof(data->last_arg)) copy_len = sizeof(data->last_arg) - 1;
+        if (copy_len > 0 && args[0].value) {
+            memcpy(data->last_arg, args[0].value, copy_len);
+            data->last_arg[copy_len] = '\0';
+        } else {
+            data->last_arg[0] = '\0';
+        }
+    }
+    if (data->result) {
+        out_result->value = data->result;
+        out_result->length = strlen(data->result);
+    } else {
+        out_result->value = "";
+        out_result->length = 0;
+    }
+    return HUI_OK;
+}
+
 static int draw_contains_text(hui_ctx *ctx, const char *expected) {
     if (!ctx || !expected) return 0;
     size_t expected_len = strlen(expected);
@@ -2156,6 +2190,143 @@ static void test_text_template_bindings(void) {
     hui_destroy(ctx);
 }
 
+static void test_action_mustache(void) {
+    hui_ctx *ctx = hui_create(NULL, NULL);
+    ASSERT(ctx != NULL);
+
+    char name_value[32] = "Alice";
+    hui_binding name_binding = {
+        .type = HUI_BIND_STRING,
+        .ptr = name_value,
+        .string_capacity = sizeof(name_value)
+    };
+    ASSERT(hui_bind_variable(ctx, "name", &name_binding) == HUI_OK);
+
+    action_test_data data = {
+        .result = "Hello",
+        .called = 0
+    };
+    data.last_arg[0] = '\0';
+    ASSERT(hui_bind_action(ctx, "greet", test_action_callback, &data) == HUI_OK);
+
+    const char *html = "<p id='msg'>{{ greet(name) }}</p>";
+    ASSERT(hui_feed_html(ctx, (hui_bytes){(const uint8_t *) html, strlen(html)}, 1) == HUI_OK);
+    ASSERT(hui_parse(ctx) == HUI_OK);
+
+    hui_build_opts opts = {120.0f, 80.0f, 96.0f, 0};
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    ASSERT(data.called > 0);
+    ASSERT(strcmp(data.last_arg, "Alice") == 0);
+
+    hui_draw_list_view view = hui_get_draw_list(ctx);
+    int hello_found = 0;
+    for (size_t i = 0; i < view.count; i++) {
+        const hui_draw *cmd = &view.items[i];
+        if (cmd->op != HUI_DRAW_OP_GLYPH_RUN) continue;
+        size_t len = 0;
+        const char *text = hui_draw_text_utf8(ctx, cmd, &len);
+        if (text && len == strlen(data.result) && strncmp(text, data.result, len) == 0) {
+            hello_found = 1;
+            break;
+        }
+    }
+    ASSERT(hello_found);
+
+    hui_destroy(ctx);
+}
+
+static void test_action_literal_mustache(void) {
+    hui_ctx *ctx = hui_create(NULL, NULL);
+    ASSERT(ctx != NULL);
+
+    action_test_data data = {
+        .result = "LiteralResult",
+        .called = 0
+    };
+    data.last_arg[0] = '\0';
+    ASSERT(hui_bind_action(ctx, "greet", test_action_callback, &data) == HUI_OK);
+
+    const char *html = "<p id='msg'>{{ greet(\"World\") }}</p>";
+    ASSERT(hui_feed_html(ctx, (hui_bytes){(const uint8_t *) html, strlen(html)}, 1) == HUI_OK);
+    ASSERT(hui_parse(ctx) == HUI_OK);
+
+    hui_build_opts opts = {160.0f, 100.0f, 96.0f, 0};
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    ASSERT(data.called > 0);
+    ASSERT(strcmp(data.last_arg, "World") == 0);
+    ASSERT(draw_contains_text(ctx, data.result));
+
+    hui_destroy(ctx);
+}
+
+static void test_onclick_event(void) {
+    hui_ctx *ctx = hui_create(NULL, NULL);
+    ASSERT(ctx != NULL);
+
+    char name_value[32] = "Alice";
+    hui_binding name_binding = {
+        .type = HUI_BIND_STRING,
+        .ptr = name_value,
+        .string_capacity = sizeof(name_value)
+    };
+    ASSERT(hui_bind_variable(ctx, "name", &name_binding) == HUI_OK);
+
+    action_test_data data = {
+        .result = NULL,
+        .called = 0
+    };
+    data.last_arg[0] = '\0';
+    ASSERT(hui_bind_action(ctx, "handleClick", test_action_callback, &data) == HUI_OK);
+
+    const char *html = "<button id='btn' onclick=\"{{ handleClick(name) }}\">Click</button>";
+    ASSERT(hui_feed_html(ctx, (hui_bytes){(const uint8_t *) html, strlen(html)}, 1) == HUI_OK);
+    ASSERT(hui_parse(ctx) == HUI_OK);
+    hui_build_opts opts = {200.0f, 120.0f, 96.0f, 0};
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    int rc = hui_trigger_event(ctx, "btn", "onclick");
+    if (rc != HUI_OK) {
+        fprintf(stderr, "onclick_event trigger rc=%d error=%s\n", rc, hui_last_error(ctx));
+    }
+    ASSERT(rc == HUI_OK);
+
+    ASSERT(data.called > 0);
+    ASSERT(strcmp(data.last_arg, "Alice") == 0);
+
+    hui_destroy(ctx);
+}
+
+static void test_onclick_literal_event(void) {
+    hui_ctx *ctx = hui_create(NULL, NULL);
+    ASSERT(ctx != NULL);
+
+    action_test_data data = {
+        .result = NULL,
+        .called = 0
+    };
+    data.last_arg[0] = '\0';
+    ASSERT(hui_bind_action(ctx, "handleClick", test_action_callback, &data) == HUI_OK);
+
+    const char *html = "<button id='btn' onclick=\"{{ handleClick('Ready') }}\">Click</button>";
+    ASSERT(hui_feed_html(ctx, (hui_bytes){(const uint8_t *) html, strlen(html)}, 1) == HUI_OK);
+    ASSERT(hui_parse(ctx) == HUI_OK);
+
+    hui_build_opts opts = {200.0f, 120.0f, 96.0f, 0};
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    int rc = hui_trigger_event(ctx, "btn", "onclick");
+    if (rc != HUI_OK) {
+        fprintf(stderr, "onclick_literal_event trigger rc=%d error=%s\n", rc, hui_last_error(ctx));
+    }
+    ASSERT(rc == HUI_OK);
+    ASSERT(data.called > 0);
+    ASSERT(strcmp(data.last_arg, "Ready") == 0);
+
+    hui_destroy(ctx);
+}
+
 static void test_text_binding_render(void) {
     hui_ctx *ctx = hui_create(NULL, NULL);
     ASSERT(ctx != NULL);
@@ -2298,6 +2469,10 @@ static const test_case tests[] = {
     {"textarea_multiline", test_textarea_multiline},
     {"textarea_min_height", test_textarea_min_height},
     {"text_template_bindings", test_text_template_bindings},
+    {"action_mustache", test_action_mustache},
+    {"action_literal_mustache", test_action_literal_mustache},
+    {"onclick_event", test_onclick_event},
+    {"onclick_literal_event", test_onclick_literal_event},
     {"render_caching", test_render_caching},
     {"text_binding_render", test_text_binding_render},
     {"auto_text_input", test_auto_text_input},

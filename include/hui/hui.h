@@ -369,12 +369,27 @@ typedef struct {
     size_t string_capacity;
 } hui_binding;
 
+typedef struct {
+    const char *value;
+    size_t length;
+} hui_action_value;
+
+typedef int (*hui_action_callback)(hui_ctx *ctx, void *user,
+                                   const hui_action_value *args, size_t arg_count,
+                                   hui_action_value *out_result);
+
 int hui_bind_variable(hui_ctx *ctx, const char *name, const hui_binding *binding);
 
 int hui_unbind_variable(hui_ctx *ctx, const char *name);
 
+int hui_bind_action(hui_ctx *ctx, const char *name, hui_action_callback callback, void *user);
+
+int hui_unbind_action(hui_ctx *ctx, const char *name);
+
+int hui_trigger_event(hui_ctx *ctx, const char *node_id, const char *event_name);
+
 void hui_set_text_input_defaults(hui_ctx *ctx, const hui_clipboard_iface *clipboard,
-                                 const hui_text_field_keymap *keymap, size_t buffer_capacity);
+                                  const hui_text_field_keymap *keymap, size_t buffer_capacity);
 
 void hui_set_text_input_repeat(hui_ctx *ctx, float initial_delay, float repeat_delay);
 
