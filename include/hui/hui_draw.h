@@ -10,7 +10,8 @@ extern "C" {
 
 typedef enum {
     HUI_DRAW_OP_RECT = 1,
-    HUI_DRAW_OP_GLYPH_RUN = 2
+    HUI_DRAW_OP_GLYPH_RUN = 2,
+    HUI_DRAW_OP_RECT_BATCH = 3
 } hui_draw_op;
 
 typedef struct {
@@ -22,8 +23,18 @@ typedef struct {
 } hui_draw;
 
 typedef struct {
+    float x;
+    float y;
+    float w;
+    float h;
+    uint32_t node_index;
+} hui_draw_rect;
+
+typedef struct {
     const hui_draw *items;
+    const hui_draw_rect *rects;
     size_t count;
+    size_t rect_count;
 } hui_draw_list_view;
 
 typedef struct {

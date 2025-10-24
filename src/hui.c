@@ -647,8 +647,9 @@ static int hui_action_execute(hui_ctx *ctx, hui_atom action_atom, const hui_acti
     if (!entry->callback) return HUI_EINVAL;
 
     size_t arg_count = args ? args->len : 0;
-    const size_t stack_cap = 4;
-    hui_action_value stack_args[stack_cap];
+    enum { HUI_ACTION_STACK_CAP = 4 };
+    hui_action_value stack_args[HUI_ACTION_STACK_CAP];
+    size_t stack_cap = HUI_ACTION_STACK_CAP;
     hui_action_value *values = stack_args;
     hui_action_value *heap_values = NULL;
     if (arg_count > stack_cap) {
@@ -2523,7 +2524,6 @@ int hui_layout(hui_ctx *ctx, const hui_build_opts *opts) {
 
 int hui_paint(hui_ctx *ctx) {
     hui_draw_list_reset(&ctx->draw);
-    hui_draw_list_init(&ctx->draw);
     float viewport_w = ctx->render_cache.valid ? ctx->render_cache.viewport_w : 800.0f;
     float viewport_h = ctx->render_cache.valid ? ctx->render_cache.viewport_h : 600.0f;
     hui_paint_build(&ctx->draw, &ctx->dom, &ctx->styles, viewport_w, viewport_h);
@@ -2556,7 +2556,9 @@ int hui_render(hui_ctx *ctx, const hui_build_opts *opts, hui_render_output *out)
     if (!needs_style && !needs_layout && !needs_paint) {
         local_out.dirty_flags = pending_dirty;
         local_out.draw.items = ctx->draw.cmds.data;
+        local_out.draw.rects = ctx->draw.rects.data;
         local_out.draw.count = ctx->draw.cmds.len;
+        local_out.draw.rect_count = ctx->draw.rects.len;
         if (out) *out = local_out;
         if (prof) {
             hui_profiler_capture_render(prof,
@@ -2602,7 +2604,9 @@ int hui_render(hui_ctx *ctx, const hui_build_opts *opts, hui_render_output *out)
 render_end:
     local_out.dirty_flags = pending_dirty;
     local_out.draw.items = ctx->draw.cmds.data;
+    local_out.draw.rects = ctx->draw.rects.data;
     local_out.draw.count = ctx->draw.cmds.len;
+    local_out.draw.rect_count = ctx->draw.rects.len;
     if (out) *out = local_out;
     if (prof) {
         hui_profiler_capture_render(prof,
@@ -3110,10 +3114,12 @@ int hui_dump_text_ir(hui_ctx *ctx, const char *path) {
 }
 
 hui_draw_list_view hui_get_draw_list(hui_ctx *ctx) {
-    hui_draw_list_view view = {NULL, 0};
+    hui_draw_list_view view = (hui_draw_list_view){0};
     if (!ctx) return view;
     view.items = ctx->draw.cmds.data;
+    view.rects = ctx->draw.rects.data;
     view.count = ctx->draw.cmds.len;
+    view.rect_count = ctx->draw.rects.len;
     return view;
 }
 
@@ -3132,6 +3138,19 @@ const hui_font_resource *hui_draw_font(hui_ctx *ctx, const hui_draw *cmd) {
     size_t idx = (size_t) cmd->u2;
     if (idx >= ctx->fonts.len) return NULL;
     return &ctx->fonts.data[idx].resource;
+}
+
+const hui_draw_rect *hui_draw_rect_batch_items(hui_ctx *ctx, const hui_draw *cmd, size_t *count) {
+    if (count) *count = 0;
+    if (!ctx || !cmd || cmd->op != HUI_DRAW_OP_RECT_BATCH) return NULL;
+    size_t start = cmd->u1;
+    size_t total = cmd->u2;
+    if (start >= ctx->draw.rects.len) return NULL;
+    if (start + total > ctx->draw.rects.len) {
+        total = ctx->draw.rects.len - start;
+    }
+    if (count) *count = total;
+    return ctx->draw.rects.data + start;
 }
 
 void hui_set_asset_base(hui_ctx *ctx, const char *path_utf8) {

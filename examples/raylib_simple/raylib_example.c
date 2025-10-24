@@ -168,6 +168,15 @@ static void render_hui_draw_list(hui_ctx *ctx, hui_draw_list_view draw_view) {
             Color color = hui_color_from_argb(cmd->u0);
             if (color.a == 0) continue;
             DrawRectangleV((Vector2){cmd->f[0], cmd->f[1]}, (Vector2){cmd->f[2], cmd->f[3]}, color);
+        } else if (cmd->op == HUI_DRAW_OP_RECT_BATCH) {
+            Color color = hui_color_from_argb(cmd->u0);
+            if (color.a == 0) continue;
+            size_t rect_count = 0;
+            const hui_draw_rect *rects = hui_draw_rect_batch_items(ctx, cmd, &rect_count);
+            for (size_t r = 0; r < rect_count; r++) {
+                DrawRectangleV((Vector2){rects[r].x, rects[r].y},
+                               (Vector2){rects[r].w, rects[r].h}, color);
+            }
         } else if (cmd->op == HUI_DRAW_OP_GLYPH_RUN) {
             if (((cmd->u0 >> 24) & 0xFFu) == 0) continue;
             draw_text_utf8(ctx, cmd);
@@ -286,7 +295,7 @@ int main(void) {
         return 1;
     }
 
-    hui_enable_profiler(ctx, GetWindowHandle());
+    //hui_enable_profiler(ctx, GetWindowHandle());
 
     hui_set_dom_filter(ctx, only_ui, NULL);
 

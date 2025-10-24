@@ -229,6 +229,8 @@ typedef struct {
 
 const hui_font_resource *hui_draw_font(hui_ctx *ctx, const hui_draw *cmd);
 
+const hui_draw_rect *hui_draw_rect_batch_items(hui_ctx *ctx, const hui_draw *cmd, size_t *count);
+
 void hui_set_asset_base(hui_ctx *ctx, const char *path_utf8);
 
 hui_node_handle hui_dom_root(hui_ctx *ctx);

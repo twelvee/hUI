@@ -2,6 +2,7 @@
 
 #include <string.h>
 #include <math.h>
+#include <limits.h>
 #include "../../include/hui/hui.h"
 
 static size_t hui_paint_utf8_next(const char *text, size_t len, size_t offset) {
@@ -112,6 +113,107 @@ static void hui_paint_cp_to_line_col(const char *text, size_t len, size_t target
 
 static int hui_node_visible(const hui_dom_node *node, float viewport_w, float viewport_h);
 
+static void hui_paint_rect_batch_reset(hui_draw_list *list) {
+    if (!list) return;
+    list->rect_batch_active = 0;
+    list->rect_batch_color = 0;
+    list->rect_batch_start = 0;
+    list->rect_batch_count = 0;
+}
+
+static void hui_paint_rect_batch_flush(hui_draw_list *list) {
+    if (!list) return;
+    if (!list->rect_batch_active || list->rect_batch_count == 0) {
+        hui_paint_rect_batch_reset(list);
+        return;
+    }
+
+    size_t start = list->rect_batch_start;
+    size_t remaining = list->rect_batch_count;
+    if (remaining == 1) {
+        if (start < list->rects.len) {
+            hui_draw_rect rect = list->rects.data[start];
+            list->rects.len = start;
+            hui_draw draw;
+            memset(&draw, 0, sizeof(draw));
+            draw.op = HUI_DRAW_OP_RECT;
+            draw.u0 = list->rect_batch_color;
+            draw.u1 = rect.node_index;
+            draw.f[0] = rect.x;
+            draw.f[1] = rect.y;
+            draw.f[2] = rect.w;
+            draw.f[3] = rect.h;
+            hui_vec_push(&list->cmds, draw);
+        }
+        hui_paint_rect_batch_reset(list);
+        return;
+    }
+
+    if (start > UINT32_MAX) {
+        if (start < list->rects.len) {
+            const hui_draw_rect *rects = &list->rects.data[start];
+            for (size_t i = 0; i < remaining; i++) {
+                hui_draw draw;
+                memset(&draw, 0, sizeof(draw));
+                draw.op = HUI_DRAW_OP_RECT;
+                draw.u0 = list->rect_batch_color;
+                draw.u1 = rects[i].node_index;
+                draw.f[0] = rects[i].x;
+                draw.f[1] = rects[i].y;
+                draw.f[2] = rects[i].w;
+                draw.f[3] = rects[i].h;
+                hui_vec_push(&list->cmds, draw);
+            }
+        }
+        list->rects.len = start;
+        hui_paint_rect_batch_reset(list);
+        return;
+    }
+
+    size_t offset = start;
+    while (remaining > 0) {
+        size_t chunk = remaining;
+        if (chunk > UINT32_MAX) chunk = UINT32_MAX;
+        hui_draw draw;
+        memset(&draw, 0, sizeof(draw));
+        draw.op = HUI_DRAW_OP_RECT_BATCH;
+        draw.u0 = list->rect_batch_color;
+        draw.u1 = (uint32_t) offset;
+        draw.u2 = (uint32_t) chunk;
+        hui_vec_push(&list->cmds, draw);
+        offset += chunk;
+        remaining -= chunk;
+    }
+
+    hui_paint_rect_batch_reset(list);
+}
+
+static void hui_paint_rect_batch_start(hui_draw_list *list, uint32_t color) {
+    if (!list) return;
+    list->rect_batch_active = 1;
+    list->rect_batch_color = color;
+    list->rect_batch_start = list->rects.len;
+    list->rect_batch_count = 0;
+}
+
+static void hui_paint_emit_rect(hui_draw_list *list, uint32_t color, uint32_t node_index,
+                                float x, float y, float w, float h) {
+    if (!list) return;
+    if (!list->rect_batch_active || list->rect_batch_color != color ||
+        list->rect_batch_count >= UINT32_MAX) {
+        hui_paint_rect_batch_flush(list);
+        hui_paint_rect_batch_start(list, color);
+    }
+    hui_draw_rect rect;
+    rect.x = x;
+    rect.y = y;
+    rect.w = w;
+    rect.h = h;
+    rect.node_index = node_index;
+    hui_vec_push(&list->rects, rect);
+    list->rect_batch_count++;
+}
+
 static void hui_paint_node(hui_draw_list *list, const hui_dom *dom, const hui_style_store *styles,
                            uint32_t idx, float viewport_w, float viewport_h) {
     if (!list || !dom || !styles) return;
@@ -124,16 +226,7 @@ static void hui_paint_node(hui_draw_list *list, const hui_dom *dom, const hui_st
 
     if (node->type == HUI_NODE_ELEM) {
         if ((cs->present_mask & HUI_STYLE_PRESENT_BG_COLOR) && (cs->bg_color >> 24) != 0) {
-            hui_draw draw;
-            memset(&draw, 0, sizeof(draw));
-            draw.op = HUI_DRAW_OP_RECT;
-            draw.u0 = cs->bg_color;
-            draw.u1 = idx;
-            draw.f[0] = node->x;
-            draw.f[1] = node->y;
-            draw.f[2] = node->w;
-            draw.f[3] = node->h;
-            hui_vec_push(&list->cmds, draw);
+            hui_paint_emit_rect(list, cs->bg_color, idx, node->x, node->y, node->w, node->h);
         }
     }
 
@@ -204,16 +297,8 @@ static void hui_paint_node(hui_draw_list *list, const hui_dom *dom, const hui_st
                                     highlight_w = max_x - highlight_x;
                             }
                             if (highlight_w <= 0.0f) continue;
-                            hui_draw highlight;
-                            memset(&highlight, 0, sizeof(highlight));
-                            highlight.op = HUI_DRAW_OP_RECT;
-                            highlight.u0 = HUI_TEXT_SELECTION_COLOR;
-                            highlight.u1 = idx;
-                            highlight.f[0] = highlight_x;
-                            highlight.f[1] = highlight_y;
-                            highlight.f[2] = highlight_w;
-                            highlight.f[3] = text_height;
-                            hui_vec_push(&list->cmds, highlight);
+                            hui_paint_emit_rect(list, HUI_TEXT_SELECTION_COLOR, idx,
+                                                highlight_x, highlight_y, highlight_w, text_height);
                         }
                     }
                 }
@@ -241,20 +326,14 @@ static void hui_paint_node(hui_draw_list *list, const hui_dom *dom, const hui_st
                 if (caret_y < node->y) caret_y = node->y;
                 if (caret_y + caret_h > node->y + node->h)
                     caret_y = (node->y + node->h) - caret_h;
-                hui_draw caret;
-                memset(&caret, 0, sizeof(caret));
-                caret.op = HUI_DRAW_OP_RECT;
-                caret.u0 = (cs->color & 0x00FFFFFFu) | 0xFF000000u;
-                caret.u1 = idx;
-                caret.f[0] = caret_x;
-                caret.f[1] = caret_y;
-                caret.f[2] = fmaxf(char_width * 0.1f, 1.0f);
-                caret.f[3] = caret_h;
-                hui_vec_push(&list->cmds, caret);
+                float caret_w = fmaxf(char_width * 0.1f, 1.0f);
+                hui_paint_emit_rect(list, (cs->color & 0x00FFFFFFu) | 0xFF000000u,
+                                    idx, caret_x, caret_y, caret_w, caret_h);
             }
         }
 
         if (has_text) {
+            hui_paint_rect_batch_flush(list);
             hui_draw draw;
             memset(&draw, 0, sizeof(draw));
             draw.f[5] = -1.0f;
@@ -285,18 +364,24 @@ static void hui_paint_node(hui_draw_list *list, const hui_dom *dom, const hui_st
 
 
 void hui_draw_list_init(hui_draw_list *list) {
+    if (!list) return;
     hui_vec_init(&list->cmds);
+    hui_vec_init(&list->rects);
+    hui_paint_rect_batch_reset(list);
 }
 
 void hui_draw_list_reset(hui_draw_list *list) {
     if (!list) return;
     list->cmds.len = 0;
+    list->rects.len = 0;
+    hui_paint_rect_batch_reset(list);
 }
 
 void hui_draw_list_release(hui_draw_list *list) {
-    free(list->cmds.data);
-    list->cmds.data = NULL;
-    list->cmds.len = list->cmds.cap = 0;
+    if (!list) return;
+    hui_vec_free(&list->cmds);
+    hui_vec_free(&list->rects);
+    hui_paint_rect_batch_reset(list);
 }
 
 static int hui_node_visible(const hui_dom_node *node, float viewport_w, float viewport_h) {
@@ -334,4 +419,5 @@ void hui_paint_build(hui_draw_list *list, const hui_dom *dom, const hui_style_st
             hui_paint_node(list, dom, styles, (uint32_t) i, viewport_w, viewport_h);
         }
     }
+    hui_paint_rect_batch_flush(list);
 }

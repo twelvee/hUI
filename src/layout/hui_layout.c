@@ -13,6 +13,7 @@ typedef struct {
     float flex_shrink;
     float shrink_weight;
     float cross_size;
+    uint8_t relayout;
 } hui_flex_item;
 
 static void layout_node(hui_dom *dom, const hui_style_store *styles, uint32_t idx, float x, float y, float width);
@@ -47,10 +48,15 @@ static void layout_flex_container(hui_dom *dom, const hui_style_store *styles, u
         node->h = cs->padding[0] + cs->padding[2];
         return;
     }
-    hui_flex_item *items = (hui_flex_item *) malloc(sizeof(hui_flex_item) * item_count);
-    if (!items) {
-        node->h = cs->padding[0] + cs->padding[2];
-        return;
+    enum { HUI_FLEX_ITEM_STACK_CAP = 32 }; // small flex containers stay on the stack
+    hui_flex_item stack_items[HUI_FLEX_ITEM_STACK_CAP];
+    hui_flex_item *items = stack_items;
+    if (item_count > HUI_FLEX_ITEM_STACK_CAP) {
+        items = (hui_flex_item *) malloc(sizeof(hui_flex_item) * item_count);
+        if (!items) {
+            node->h = cs->padding[0] + cs->padding[2];
+            return;
+        }
     }
 
     float base_sum = 0.0f;
@@ -93,6 +99,7 @@ static void layout_flex_container(hui_dom *dom, const hui_style_store *styles, u
         }
         if (item->base_main < 0.0f) item->base_main = 0.0f;
         item->target_main = item->base_main;
+        item->relayout = 0;
         item->shrink_weight = item->flex_shrink * item->base_main;
         base_sum += item->base_main;
         total_grow += item->flex_grow;
@@ -110,7 +117,13 @@ static void layout_flex_container(hui_dom *dom, const hui_style_store *styles, u
     if (leftover > 0.0f && total_grow > 0.0f) {
         for (size_t i = 0; i < item_count; i++) {
             float share = items[i].flex_grow / total_grow;
-            items[i].target_main = items[i].base_main + leftover * share;
+            float new_main = items[i].base_main + leftover * share;
+            if (new_main < 0.0f) new_main = 0.0f;
+            if (cs->flex_direction == HUI_FLEX_DIRECTION_ROW &&
+                fabsf(new_main - items[i].base_main) > 0.001f) {
+                items[i].relayout = 1;
+            }
+            items[i].target_main = new_main;
         }
     } else if (leftover < 0.0f && total_shrink_weight > 0.0f) {
         float deficit = -leftover;
@@ -119,6 +132,10 @@ static void layout_flex_container(hui_dom *dom, const hui_style_store *styles, u
             float delta = (weight / total_shrink_weight) * deficit;
             float new_main = items[i].base_main - delta;
             if (new_main < 0.0f) new_main = 0.0f;
+            if (cs->flex_direction == HUI_FLEX_DIRECTION_ROW &&
+                fabsf(new_main - items[i].base_main) > 0.001f) {
+                items[i].relayout = 1;
+            }
             items[i].target_main = new_main;
         }
     }
@@ -126,17 +143,14 @@ static void layout_flex_container(hui_dom *dom, const hui_style_store *styles, u
     float main_total = 0.0f;
     float max_cross = 0.0f;
     for (size_t i = 0; i < item_count; i++) {
-        const hui_computed_style *child_cs = &styles->styles.data[items[i].index];
-        float width_param = 0.0f;
-        if (cs->flex_direction == HUI_FLEX_DIRECTION_ROW) {
-            width_param = items[i].target_main;
-        } else {
-            width_param = (child_cs->width >= 0.0f) ? child_cs->width : inner_width;
-        }
-        if (width_param < 0.0f) width_param = 0.0f;
-        layout_node(dom, styles, items[i].index, 0.0f, 0.0f, width_param);
         hui_dom_node *child_node = &dom->nodes.data[items[i].index];
         if (cs->flex_direction == HUI_FLEX_DIRECTION_ROW) {
+            if (items[i].relayout) {
+                float width_param = items[i].target_main;
+                if (width_param < 0.0f) width_param = 0.0f;
+                layout_node(dom, styles, items[i].index, 0.0f, 0.0f, width_param);
+                child_node = &dom->nodes.data[items[i].index];
+            }
             items[i].target_main = child_node->w;
             items[i].cross_size = child_node->h;
         } else {
@@ -255,7 +269,7 @@ static void layout_flex_container(hui_dom *dom, const hui_style_store *styles, u
         }
     }
 
-    free(items);
+    if (items != stack_items) free(items);
 }
 
 static void layout_node(hui_dom *dom, const hui_style_store *styles, uint32_t idx, float x, float y, float width) {

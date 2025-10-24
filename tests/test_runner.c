@@ -798,12 +798,63 @@ static void test_ir_serialization(void) {
     hui_draw_list_reset(&list);
 }
 
+static void test_rect_batching(void) {
+    hui_ctx *ctx = hui_create(NULL, NULL);
+    ASSERT(ctx != NULL);
+
+    const char *html = "<!doctype html><html><body>"
+                       "<div class='panel'><div class='box'></div><div class='box'></div><div class='box'></div></div>"
+                       "</body></html>";
+    const char *css = "body{background-color:#000000;}"
+                      ".panel{background-color:#112233;width:64px;padding:4px;}"
+                      ".box{background-color:#445566;width:18px;height:14px;margin:2px;}";
+
+    ASSERT(hui_feed_html(ctx, (hui_bytes){(const uint8_t *) html, strlen(html)}, 1) == HUI_OK);
+    ASSERT(hui_feed_css(ctx, (hui_bytes){(const uint8_t *) css, strlen(css)}, 1) == HUI_OK);
+    ASSERT(hui_parse(ctx) == HUI_OK);
+
+    hui_build_opts opts = {160.0f, 120.0f, 96.0f, 0};
+    ASSERT(hui_build_ir(ctx, &opts) == HUI_OK);
+
+    hui_draw_list_view view = hui_get_draw_list(ctx);
+    ASSERT(view.rect_count >= 3);
+
+    int batch_found = 0;
+    for (size_t i = 0; i < view.count; i++) {
+        const hui_draw *cmd = &view.items[i];
+        if (cmd->op != HUI_DRAW_OP_RECT_BATCH) continue;
+        if (cmd->u0 != 0xFF445566u) continue;
+        size_t rect_count = 0;
+        const hui_draw_rect *rects = hui_draw_rect_batch_items(ctx, cmd, &rect_count);
+        ASSERT(rects != NULL);
+        ASSERT(rect_count == 3);
+        for (size_t r = 0; r < rect_count; r++) {
+            ASSERT(rects[r].w > 0.0f);
+            ASSERT(rects[r].h > 0.0f);
+            ASSERT(rects[r].node_index != 0xFFFFFFFFu);
+        }
+        batch_found = 1;
+        break;
+    }
+    ASSERT(batch_found);
+
+    hui_destroy(ctx);
+}
 static uint32_t find_rect_color_for_node(hui_ctx *ctx, uint32_t node_index) {
     hui_draw_list_view view = hui_get_draw_list(ctx);
     for (size_t i = 0; i < view.count; i++) {
         const hui_draw *cmd = &view.items[i];
-        if (cmd->op == HUI_DRAW_OP_RECT && cmd->u1 == node_index)
-            return cmd->u0;
+        if (cmd->op == HUI_DRAW_OP_RECT) {
+            if (cmd->u1 == node_index)
+                return cmd->u0;
+        } else if (cmd->op == HUI_DRAW_OP_RECT_BATCH) {
+            size_t rect_count = 0;
+            const hui_draw_rect *rects = hui_draw_rect_batch_items(ctx, cmd, &rect_count);
+            for (size_t r = 0; r < rect_count; r++) {
+                if (rects[r].node_index == node_index)
+                    return cmd->u0;
+            }
+        }
     }
     return 0;
 }
@@ -1721,11 +1772,23 @@ static void test_text_field_pointer_caret_single_line(void) {
         const hui_draw *cmd = &view.items[i];
         printf("single cmd %zu op=%u u1=%u x=%.2f y=%.2f w=%.2f h=%.2f\n",
                i, cmd->op, cmd->u1, cmd->f[0], cmd->f[1], cmd->f[2], cmd->f[3]);
-        if (cmd->op != HUI_DRAW_OP_RECT) continue;
-        if (cmd->f[2] > char_width * 0.5f) continue;
-        if (fabsf(cmd->f[0] - expected_caret_x) <= char_width * 0.25f) {
-            caret_found = 1;
-            break;
+        if (cmd->op == HUI_DRAW_OP_RECT) {
+            if (cmd->f[2] > char_width * 0.5f) continue;
+            if (fabsf(cmd->f[0] - expected_caret_x) <= char_width * 0.25f) {
+                caret_found = 1;
+                break;
+            }
+        } else if (cmd->op == HUI_DRAW_OP_RECT_BATCH) {
+            size_t rect_count = 0;
+            const hui_draw_rect *rects = hui_draw_rect_batch_items(ctx, cmd, &rect_count);
+            for (size_t r = 0; r < rect_count; r++) {
+                if (rects[r].w > char_width * 0.5f) continue;
+                if (fabsf(rects[r].x - expected_caret_x) <= char_width * 0.25f) {
+                    caret_found = 1;
+                    break;
+                }
+            }
+            if (caret_found) break;
         }
     }
     ASSERT(caret_found);
@@ -1808,12 +1871,25 @@ static void test_text_field_pointer_drag_selection(void) {
     int highlight_found = 0;
     for (size_t i = 0; i < view.count; i++) {
         const hui_draw *cmd = &view.items[i];
-        if (cmd->op != HUI_DRAW_OP_RECT) continue;
-        if (cmd->u1 != field.text.index) continue;
-        if (cmd->f[2] <= char_width * 0.5f) continue;
-        if (fabsf(cmd->f[2] - expected_width) <= width_tolerance) {
-            highlight_found = 1;
-            break;
+        if (cmd->op == HUI_DRAW_OP_RECT) {
+            if (cmd->u1 != field.text.index) continue;
+            if (cmd->f[2] <= char_width * 0.5f) continue;
+            if (fabsf(cmd->f[2] - expected_width) <= width_tolerance) {
+                highlight_found = 1;
+                break;
+            }
+        } else if (cmd->op == HUI_DRAW_OP_RECT_BATCH) {
+            size_t rect_count = 0;
+            const hui_draw_rect *rects = hui_draw_rect_batch_items(ctx, cmd, &rect_count);
+            for (size_t r = 0; r < rect_count; r++) {
+                if (rects[r].node_index != field.text.index) continue;
+                if (rects[r].w <= char_width * 0.5f) continue;
+                if (fabsf(rects[r].w - expected_width) <= width_tolerance) {
+                    highlight_found = 1;
+                    break;
+                }
+            }
+            if (highlight_found) break;
         }
     }
     ASSERT(highlight_found);
@@ -1894,12 +1970,25 @@ static void test_text_field_pointer_caret_multiline(void) {
     int caret_found = 0;
     for (size_t i = 0; i < view.count; i++) {
         const hui_draw *cmd = &view.items[i];
-        if (cmd->op != HUI_DRAW_OP_RECT) continue;
-        if (cmd->f[2] > char_width * 0.5f) continue;
-        if (fabsf(cmd->f[0] - expected_caret_x) <= char_width * 0.35f &&
-            fabsf(cmd->f[1] - expected_caret_y) <= line_height * 0.25f) {
-            caret_found = 1;
-            break;
+        if (cmd->op == HUI_DRAW_OP_RECT) {
+            if (cmd->f[2] > char_width * 0.5f) continue;
+            if (fabsf(cmd->f[0] - expected_caret_x) <= char_width * 0.35f &&
+                fabsf(cmd->f[1] - expected_caret_y) <= line_height * 0.25f) {
+                caret_found = 1;
+                break;
+            }
+        } else if (cmd->op == HUI_DRAW_OP_RECT_BATCH) {
+            size_t rect_count = 0;
+            const hui_draw_rect *rects = hui_draw_rect_batch_items(ctx, cmd, &rect_count);
+            for (size_t r = 0; r < rect_count; r++) {
+                if (rects[r].w > char_width * 0.5f) continue;
+                if (fabsf(rects[r].x - expected_caret_x) <= char_width * 0.35f &&
+                    fabsf(rects[r].y - expected_caret_y) <= line_height * 0.25f) {
+                    caret_found = 1;
+                    break;
+                }
+            }
+            if (caret_found) break;
         }
     }
     ASSERT(caret_found);
@@ -2453,6 +2542,7 @@ static const test_case tests[] = {
     {"dom_mutations", test_dom_mutations},
     {"queries", test_queries},
     {"ir_serialization", test_ir_serialization},
+    {"rect_batching", test_rect_batching},
     {"css_variables_style", test_css_variables_style},
     {"flex_layout_row", test_flex_layout_row},
     {"flex_layout_column", test_flex_layout_column},
