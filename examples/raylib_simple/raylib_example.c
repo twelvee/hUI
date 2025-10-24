@@ -8,6 +8,7 @@
 
 #include "hui/hui.h"
 #include "hui/hui_draw.h"
+#include "hui/hui_utils.h"
 #include "hui/hui_html_tags.h"
 
 typedef struct {
@@ -202,29 +203,15 @@ static void process_pointer_input(hui_ctx *ctx, pointer_state *state) {
         float dy = pos.y - state->pos.y;
         int moved = !state->inside || (fabsf(dx) + fabsf(dy)) > 0.5f;
         if (moved) {
-            hui_input_event ev;
-            memset(&ev, 0, sizeof(ev));
-            ev.type = HUI_INPUT_EVENT_POINTER_MOVE;
-            ev.data.pointer_move.x = pos.x;
-            ev.data.pointer_move.y = pos.y;
-            hui_push_input(ctx, &ev);
+            hui_input_pointer_move(ctx, pos.x, pos.y);
         }
         if (buttons != state->buttons) {
-            hui_input_event ev;
-            memset(&ev, 0, sizeof(ev));
-            ev.type = HUI_INPUT_EVENT_POINTER_BUTTON;
-            ev.data.pointer_button.x = pos.x;
-            ev.data.pointer_button.y = pos.y;
-            ev.data.pointer_button.buttons = buttons;
-            hui_push_input(ctx, &ev);
+            hui_input_pointer_button(ctx, pos.x, pos.y, buttons);
         }
         state->pos = pos;
         state->buttons = buttons;
     } else if (state->inside) {
-        hui_input_event ev;
-        memset(&ev, 0, sizeof(ev));
-        ev.type = HUI_INPUT_EVENT_POINTER_LEAVE;
-        hui_push_input(ctx, &ev);
+        hui_input_pointer_leave(ctx);
         state->pos = (Vector2){-1.0f, -1.0f};
         state->buttons = 0u;
     }
@@ -259,27 +246,15 @@ static void process_key_input(hui_ctx *ctx) {
     for (size_t i = 0; i < sizeof(tracked_keys) / sizeof(tracked_keys[0]); i++) {
         int key = tracked_keys[i];
         if (IsKeyPressed(key)) {
-            hui_input_event ev;
-            memset(&ev, 0, sizeof(ev));
-            ev.type = HUI_INPUT_EVENT_KEY_DOWN;
-            ev.data.key.keycode = (uint32_t) key;
-            ev.data.key.modifiers = read_modifiers();
-            hui_push_input(ctx, &ev);
+            uint32_t mods = read_modifiers();
+            hui_input_key_down_with_mods(ctx, (uint32_t) key, mods);
             if (key == KEY_ENTER) {
-                hui_input_event text_ev;
-                memset(&text_ev, 0, sizeof(text_ev));
-                text_ev.type = HUI_INPUT_EVENT_TEXT_INPUT;
-                text_ev.data.text.codepoint = '\n';
-                hui_push_input(ctx, &text_ev);
+                hui_input_text_utf32(ctx, '\n');
             }
         }
         if (IsKeyReleased(key)) {
-            hui_input_event ev;
-            memset(&ev, 0, sizeof(ev));
-            ev.type = HUI_INPUT_EVENT_KEY_UP;
-            ev.data.key.keycode = (uint32_t) key;
-            ev.data.key.modifiers = read_modifiers();
-            hui_push_input(ctx, &ev);
+            uint32_t mods = read_modifiers();
+            hui_input_key_up_with_mods(ctx, (uint32_t) key, mods);
         }
     }
 }
@@ -287,11 +262,7 @@ static void process_key_input(hui_ctx *ctx) {
 static void process_text_input(hui_ctx *ctx) {
     int codepoint;
     while ((codepoint = GetCharPressed()) > 0) {
-        hui_input_event ev;
-        memset(&ev, 0, sizeof(ev));
-        ev.type = HUI_INPUT_EVENT_TEXT_INPUT;
-        ev.data.text.codepoint = (uint32_t) codepoint;
-        hui_push_input(ctx, &ev);
+        hui_input_text_utf32(ctx, (uint32_t) codepoint);
     }
 }
 
@@ -375,21 +346,16 @@ int main(void) {
     hui_set_asset_base(ctx, "examples/raylib_simple");
 
     const char *html_path = "examples/raylib_simple/ui.html";
-    char *html_text = LoadFileText(html_path);
-    if (!html_text) {
-        TraceLog(LOG_ERROR, "Failed to load %s", html_path);
+    if (hui_feed_html_file(ctx, html_path) != HUI_OK) {
+        TraceLog(LOG_ERROR, "Failed to load %s: %s", html_path, hui_last_error(ctx));
         hui_destroy(ctx);
         CloseWindow();
         return 1;
     }
-    hui_feed_html(ctx, (hui_bytes){(const uint8_t *) html_text, strlen(html_text)}, 1);
-    UnloadFileText(html_text);
 
     const char *css_path = "examples/raylib_simple/ui.css";
-    char *css_text = LoadFileText(css_path);
-    if (css_text) {
-        hui_feed_css(ctx, (hui_bytes){(const uint8_t *) css_text, strlen(css_text)}, 1);
-        UnloadFileText(css_text);
+    if (hui_feed_css_file(ctx, css_path) != HUI_OK) {
+        TraceLog(LOG_WARNING, "Failed to load %s: %s", css_path, hui_last_error(ctx));
     }
 
     const char *demo_palette =

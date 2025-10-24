@@ -363,6 +363,11 @@ static void hui_set_error(hui_ctx *ctx, const char *msg) {
     snprintf(ctx->last_error, sizeof(ctx->last_error), "%s", msg);
 }
 
+void hui_set_error_message(hui_ctx *ctx, const char *msg) {
+    if (!ctx || !msg) return;
+    hui_set_error(ctx, msg);
+}
+
 static hui_atom hui_intern_event_name(hui_ctx *ctx, const char *name, size_t len) {
     if (!ctx || !name || len == 0) return 0;
     size_t start = 0;

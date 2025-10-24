@@ -280,6 +280,8 @@ float hui_node_line_height(hui_ctx *ctx, hui_node_handle h);
 
 const char *hui_last_error(hui_ctx *ctx);
 
+void hui_set_error_message(hui_ctx *ctx, const char *msg_utf8);
+
 typedef struct {
     const char *(*get_text)(void *user);
     void (*set_text)(void *user, const char *text_utf8);
